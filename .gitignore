@@ -1,0 +1,17 @@
+Old/
+CLAUDE.md
+AGENTS.md
+.claude/
+OVERVIEW.md
+.env
+.gorechera/
+*.exe
+*.exe~
+*.obj
+*.pdb
+temp/
+tmp/
+dist/
+test_*.go
+UNRELEASED.md
+.codegraph.db
