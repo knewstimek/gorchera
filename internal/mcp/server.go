@@ -636,7 +636,7 @@ func (s *Server) toolSteer(ctx context.Context, args map[string]any) (toolResult
 	if err != nil {
 		return toolResult{}, err
 	}
-	return marshalToolResult(map[string]any{
+	return jsonResult(map[string]any{
 		"status":                 "steered",
 		"leader_context_summary": job.LeaderContextSummary,
 	})
