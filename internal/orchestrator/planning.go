@@ -201,6 +201,17 @@ func normalizeStrictnessLevel(level string) string {
 	}
 }
 
+func normalizeContextMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "summary":
+		return "summary"
+	case "minimal":
+		return "minimal"
+	default:
+		return "full"
+	}
+}
+
 func hasSystemIntent(job domain.Job) bool {
 	for _, criterion := range job.DoneCriteria {
 		if strings.Contains(strings.ToLower(criterion), "system") {

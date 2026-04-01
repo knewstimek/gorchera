@@ -283,6 +283,7 @@ type Job struct {
 	Constraints             []string              `json:"constraints,omitempty"`
 	DoneCriteria            []string              `json:"done_criteria,omitempty"`
 	StrictnessLevel         string                `json:"strictness_level,omitempty"` // strict | normal | lenient
+	ContextMode             string                `json:"context_mode,omitempty"`     // full | summary | minimal
 	RoleProfiles            RoleProfiles          `json:"role_profiles"`
 	VerificationContract    *VerificationContract `json:"verification_contract,omitempty"`
 	VerificationContractRef string                `json:"verification_contract_ref,omitempty"`

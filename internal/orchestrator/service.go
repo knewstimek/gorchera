@@ -47,6 +47,7 @@ type CreateJobInput struct {
 	RoleProfiles    domain.RoleProfiles
 	MaxSteps        int
 	StrictnessLevel string // strict | normal | lenient; empty defaults to "normal"
+	ContextMode     string // full | summary | minimal; empty defaults to "full"
 }
 
 type Service struct {
@@ -117,6 +118,7 @@ func (s *Service) Start(ctx context.Context, input CreateJobInput) (*domain.Job,
 		Constraints:     input.Constraints,
 		DoneCriteria:    input.DoneCriteria,
 		StrictnessLevel: normalizeStrictnessLevel(input.StrictnessLevel),
+		ContextMode:     normalizeContextMode(input.ContextMode),
 		RoleProfiles:    roleProfiles,
 		Status:          domain.JobStatusStarting,
 		Provider:        input.Provider,
@@ -154,6 +156,7 @@ func (s *Service) StartAsync(ctx context.Context, input CreateJobInput) (*domain
 		Constraints:     input.Constraints,
 		DoneCriteria:    input.DoneCriteria,
 		StrictnessLevel: normalizeStrictnessLevel(input.StrictnessLevel),
+		ContextMode:     normalizeContextMode(input.ContextMode),
 		RoleProfiles:    roleProfiles,
 		Status:          domain.JobStatusStarting,
 		Provider:        input.Provider,
@@ -868,6 +871,27 @@ func mergeTokenUsage(current, delta domain.TokenUsage) domain.TokenUsage {
 	current.TotalTokens += delta.TotalTokens
 	current.EstimatedCostUSD += delta.EstimatedCostUSD
 	return current
+}
+
+// Steer injects a supervisor directive into the job's leader context.
+// The next leader call will see this directive with highest priority.
+func (s *Service) Steer(ctx context.Context, jobID string, message string) (*domain.Job, error) {
+	job, err := s.state.LoadJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	directive := "[SUPERVISOR] " + strings.TrimSpace(message)
+	if strings.TrimSpace(job.LeaderContextSummary) != "" {
+		job.LeaderContextSummary = directive + "\n\n" + job.LeaderContextSummary
+	} else {
+		job.LeaderContextSummary = directive
+	}
+	s.addEvent(job, "supervisor_steer", message)
+	s.touch(job)
+	if err := s.state.SaveJob(ctx, job); err != nil {
+		return nil, err
+	}
+	return job, nil
 }
 
 func stepByIndex(job *domain.Job, stepIndex int) *domain.Step {

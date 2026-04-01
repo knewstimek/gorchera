@@ -212,7 +212,7 @@ Verification contract:
 }
 
 func buildLeaderPrompt(job domain.Job) string {
-	payload, _ := json.MarshalIndent(job, "", "  ")
+	payload := buildLeaderJobPayload(job)
 	contractPayload := "{}"
 	strictnessLevel := strings.TrimSpace(job.StrictnessLevel)
 	if strings.TrimSpace(job.SprintContractRef) != "" {
@@ -271,7 +271,140 @@ Current job state:
 
 Sprint contract:
 %s
-`, job.Goal, strings.Join(completionRules, "\n"), string(payload), contractPayload))
+If the leader context contains a [SUPERVISOR] directive, follow it with highest priority.
+Supervisor directives override previous plans.
+
+`, job.Goal, strings.Join(completionRules, "\n"), payload, contractPayload))
+}
+
+// buildLeaderJobPayload serializes the job state for the leader prompt,
+// respecting the job's ContextMode setting to control payload size.
+func buildLeaderJobPayload(job domain.Job) string {
+	mode := strings.TrimSpace(strings.ToLower(job.ContextMode))
+	if mode == "" {
+		mode = "full"
+	}
+	switch mode {
+	case "summary":
+		return buildSummaryPayload(job)
+	case "minimal":
+		return buildMinimalPayload(job)
+	default:
+		raw, _ := json.MarshalIndent(job, "", "  ")
+		return string(raw)
+	}
+}
+
+func buildSummaryPayload(job domain.Job) string {
+	type summaryStep struct {
+		Index    int    `json:"index"`
+		Type     string `json:"task_type"`
+		Status   string `json:"status"`
+		Summary  string `json:"summary,omitempty"`
+		TaskText string `json:"task_text,omitempty"`
+	}
+	type summaryJob struct {
+		Goal                 string        `json:"goal"`
+		Summary              string        `json:"summary,omitempty"`
+		LeaderContextSummary string        `json:"leader_context_summary,omitempty"`
+		StrictnessLevel      string        `json:"strictness_level,omitempty"`
+		ContextMode          string        `json:"context_mode"`
+		Status               string        `json:"status"`
+		CurrentStep          int           `json:"current_step"`
+		MaxSteps             int           `json:"max_steps"`
+		TokenUsage           interface{}   `json:"token_usage"`
+		Steps                []summaryStep `json:"steps"`
+	}
+	steps := make([]summaryStep, 0, len(job.Steps))
+	for i, s := range job.Steps {
+		ss := summaryStep{Index: s.Index, Type: s.TaskType, Status: string(s.Status)}
+		// Last 2 steps get full detail; earlier steps get truncated summary
+		if i >= len(job.Steps)-2 {
+			ss.Summary = s.Summary
+			ss.TaskText = s.TaskText
+		} else {
+			summary := s.Summary
+			if len(summary) > 80 {
+				summary = summary[:80] + "..."
+			}
+			ss.Summary = summary
+		}
+		steps = append(steps, ss)
+	}
+	out := summaryJob{
+		Goal:                 job.Goal,
+		Summary:              job.Summary,
+		LeaderContextSummary: job.LeaderContextSummary,
+		StrictnessLevel:      job.StrictnessLevel,
+		ContextMode:          "summary",
+		Status:               string(job.Status),
+		CurrentStep:          job.CurrentStep,
+		MaxSteps:             job.MaxSteps,
+		TokenUsage:           job.TokenUsage,
+		Steps:                steps,
+	}
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	return string(raw)
+}
+
+func buildMinimalPayload(job domain.Job) string {
+	succeeded, failed, active := 0, 0, 0
+	for _, s := range job.Steps {
+		switch s.Status {
+		case domain.StepStatusSucceeded:
+			succeeded++
+		case domain.StepStatusFailed:
+			failed++
+		default:
+			active++
+		}
+	}
+	type minimalStep struct {
+		Index    int    `json:"index"`
+		Type     string `json:"task_type"`
+		Status   string `json:"status"`
+		Summary  string `json:"summary,omitempty"`
+		TaskText string `json:"task_text,omitempty"`
+	}
+	type minimalJob struct {
+		Goal                 string       `json:"goal"`
+		Summary              string       `json:"summary,omitempty"`
+		LeaderContextSummary string       `json:"leader_context_summary,omitempty"`
+		StrictnessLevel      string       `json:"strictness_level,omitempty"`
+		ContextMode          string       `json:"context_mode"`
+		Status               string       `json:"status"`
+		CurrentStep          int          `json:"current_step"`
+		MaxSteps             int          `json:"max_steps"`
+		SucceededSteps       int          `json:"succeeded_steps"`
+		FailedSteps          int          `json:"failed_steps"`
+		ActiveSteps          int          `json:"active_steps"`
+		LastStep             *minimalStep `json:"last_step,omitempty"`
+	}
+	out := minimalJob{
+		Goal:                 job.Goal,
+		Summary:              job.Summary,
+		LeaderContextSummary: job.LeaderContextSummary,
+		StrictnessLevel:      job.StrictnessLevel,
+		ContextMode:          "minimal",
+		Status:               string(job.Status),
+		CurrentStep:          job.CurrentStep,
+		MaxSteps:             job.MaxSteps,
+		SucceededSteps:       succeeded,
+		FailedSteps:          failed,
+		ActiveSteps:          active,
+	}
+	if len(job.Steps) > 0 {
+		last := job.Steps[len(job.Steps)-1]
+		out.LastStep = &minimalStep{
+			Index:    last.Index,
+			Type:     last.TaskType,
+			Status:   string(last.Status),
+			Summary:  last.Summary,
+			TaskText: last.TaskText,
+		}
+	}
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	return string(raw)
 }
 
 func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {

@@ -204,6 +204,7 @@ func toolList() []toolDef {
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
+					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only", Default: "full"},
 				},
 				Required: []string{"goal"},
 			},
@@ -304,6 +305,18 @@ func toolList() []toolDef {
 				Required: []string{"job_id"},
 			},
 		},
+		{
+			Name:        "gorechera_steer",
+			Description: "Inject a supervisor directive into a running job. The next leader call will see this directive with highest priority.",
+			InputSchema: toolInputSchema{
+				Type: "object",
+				Properties: map[string]schemaProp{
+					"job_id":  {Type: "string", Description: "Job ID"},
+					"message": {Type: "string", Description: "Supervisor directive for the leader"},
+				},
+				Required: []string{"job_id", "message"},
+			},
+		},
 	}
 }
 
@@ -356,6 +369,8 @@ func (s *Server) handleToolCall(req jsonRPCRequest) *jsonRPCResponse {
 		result, err = s.toolCancel(ctx, args)
 	case "gorechera_resume":
 		result, err = s.toolResume(ctx, args)
+	case "gorechera_steer":
+		result, err = s.toolSteer(ctx, args)
 	default:
 		return errorResp(req.ID, -32602, fmt.Sprintf("unknown tool: %s", p.Name))
 	}
@@ -377,6 +392,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	workspaceDir := stringArg(args, "workspace_dir")
 	maxSteps := intArgDefault(args, "max_steps", 8)
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
+	contextMode := stringArgDefault(args, "context_mode", "full")
 
 	input := orchestrator.CreateJobInput{
 		Goal:            goal,
@@ -384,6 +400,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		WorkspaceDir:    workspaceDir,
 		MaxSteps:        maxSteps,
 		StrictnessLevel: strictnessLevel,
+		ContextMode:     contextMode,
 		RoleProfiles:    domain.DefaultRoleProfiles(provider),
 	}
 
@@ -607,4 +624,20 @@ func intArgDefault(args map[string]any, key string, def int) int {
 		return v
 	}
 	return def
+}
+
+func (s *Server) toolSteer(ctx context.Context, args map[string]any) (toolResult, error) {
+	jobID := stringArg(args, "job_id")
+	message := stringArg(args, "message")
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(message) == "" {
+		return toolResult{}, fmt.Errorf("job_id and message are required")
+	}
+	job, err := s.service.Steer(ctx, jobID, message)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return marshalToolResult(map[string]any{
+		"status":                 "steered",
+		"leader_context_summary": job.LeaderContextSummary,
+	})
 }
