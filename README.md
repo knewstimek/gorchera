@@ -1,87 +1,62 @@
-<!-- gorechera orchestrator -->
-# Gorechera
+# Gorchera
 
-Gorechera is a stateful multi-agent orchestration engine.
+Go stateful multi-agent orchestration engine with self-improvement capabilities.
 
-This repository currently contains a Go MVP that focuses on:
+**Gorchera** (Go + Orchestra) coordinates AI agents (GPT, Claude) to plan, implement, review, test, and evaluate software tasks autonomously. A supervisor agent (e.g., Claude Opus via MCP) monitors and steers the workflow.
 
-- structured leader and worker message schemas
-- provider adapter boundaries
-- role-based execution profiles for planner/reviewer/executor/tester/evaluator
-- file-based job and artifact storage
-- a bounded internal loop with retry-safe status transitions
-- CLI and HTTP operator entry points
-- read-only visibility for job state, events, and artifacts
+## Features
 
-The first implementation ships with a `mock` provider so the orchestration loop can run end-to-end before real Codex or Claude adapters are added.
-Gorechera chooses provider/model/effort/tool-policy/fallback/budget per role instead of relying on one global provider setting.
-The architecture is intended to remain cross-platform across Windows, macOS, and Linux.
+- **6-role pipeline**: planner -> leader -> executor/reviewer/tester -> evaluator
+- **3 strictness levels**: strict (implement+review+test), normal (implement only), lenient (results only)
+- **3 context modes**: full, summary, minimal -- controls leader prompt payload size
+- **Job chaining**: sequential multi-goal execution with automatic advancement
+- **Supervisor steering**: mid-flight directive injection via `gorechera_steer`
+- **Provider adapters**: GPT/Codex, Claude, Mock -- with per-role model selection
+- **Self-improvement**: Gorchera can modify its own codebase via orchestrated jobs
+- **Error classification**: 12 error types with 3-strike retry policy
+- **Token tracking**: rough per-job and per-step token/cost estimation
+- **Security**: SUPERVISOR injection prevention, workspace validation, steer authorization
+- **MCP server**: 13 tools for supervisor agent integration (stdio JSON-RPC 2.0)
 
-See [docs/IMPLEMENTATION_STATUS.md](./docs/IMPLEMENTATION_STATUS.md) for the current MVP boundary, known bugs, and self-hosting readiness.
-
-## Commands
+## Quick Start
 
 ```bash
-go run ./cmd/gorechera run -goal "Create an orchestrator MVP"
-go run ./cmd/gorechera run -goal "Create an orchestrator MVP" -profiles-file ./examples/role-profiles.sample.json
+go build ./...
+go run ./cmd/gorechera mcp          # Start MCP server for Claude Code integration
+go run ./cmd/gorechera run -goal "Add a hello function" -provider codex
 go run ./cmd/gorechera status -all
-go run ./cmd/gorechera events -job <job-id>
-go run ./cmd/gorechera artifacts -job <job-id>
-go run ./cmd/gorechera verification -job <job-id>
-go run ./cmd/gorechera resume -job <job-id>
-go run ./cmd/gorechera approve -job <job-id>
-go run ./cmd/gorechera retry -job <job-id>
-go run ./cmd/gorechera cancel -job <job-id> -reason "operator pause"
-go run ./cmd/gorechera reject -job <job-id> -reason "not approved"
-go run ./cmd/gorechera harness-start -command go -category test -args "test,./internal/api,-run,TestHelperHarnessProcess,-count=1" -env "GO_WANT_HELPER_PROCESS=1"
-go run ./cmd/gorechera harness-start -job <job-id> -command go -category test -args "test,./internal/api,-run,TestHelperHarnessProcess,-count=1" -env "GO_WANT_HELPER_PROCESS=1"
-go run ./cmd/gorechera harness-list
-go run ./cmd/gorechera harness-list -job <job-id>
-go run ./cmd/gorechera harness-status -pid <pid>
-go run ./cmd/gorechera harness-status -job <job-id> -pid <pid>
-go run ./cmd/gorechera harness-stop -pid <pid>
-go run ./cmd/gorechera harness-stop -job <job-id> -pid <pid>
-go run ./cmd/gorechera harness-view -job <job-id>
-go run ./cmd/gorechera stream -job <job-id> -server http://127.0.0.1:8080
-go run ./cmd/gorechera serve -addr :8080
 ```
 
-## HTTP API
+## MCP Tools
 
-The current MVP exposes read-first operator endpoints:
+| Tool | Description |
+|------|-------------|
+| `gorechera_start_job` | Start a single job |
+| `gorechera_start_chain` | Start sequential job chain |
+| `gorechera_status` | Get job status |
+| `gorechera_chain_status` | Get chain status |
+| `gorechera_steer` | Inject supervisor directive |
+| `gorechera_events` | Get job events |
+| `gorechera_artifacts` | Get job artifacts |
+| `gorechera_approve` | Approve blocked action |
+| `gorechera_reject` | Reject blocked action |
+| `gorechera_retry` | Retry failed job |
+| `gorechera_cancel` | Cancel running job |
+| `gorechera_resume` | Resume blocked job |
+| `gorechera_list_jobs` | List all jobs |
 
-- `GET /healthz`
-- `GET /jobs`
-- `POST /jobs`
-- `GET /jobs/{job-id}`
-- `GET /jobs/{job-id}/events`
-- `GET /jobs/{job-id}/events/stream`
-- `GET /jobs/{job-id}/artifacts`
-- `GET /jobs/{job-id}/verification`
-- `GET /jobs/{job-id}/planning`
-- `GET /jobs/{job-id}/evaluator`
-- `GET /jobs/{job-id}/profile`
-- `POST /jobs/{job-id}/resume`
-- `POST /jobs/{job-id}/approve`
-- `POST /jobs/{job-id}/retry`
-- `POST /jobs/{job-id}/cancel`
-- `POST /jobs/{job-id}/reject`
-- `GET /jobs/{job-id}/harness`
-- `GET /jobs/{job-id}/harness/processes`
-- `POST /jobs/{job-id}/harness/processes`
-- `GET /jobs/{job-id}/harness/processes/{pid}`
-- `POST /jobs/{job-id}/harness/processes/{pid}/stop`
-- `GET /harness/processes`
-- `POST /harness/processes`
-- `GET /harness/processes/{pid}`
-- `POST /harness/processes/{pid}/stop`
+## Architecture
 
-The `/harness/*` routes expose the global runtime inventory, while `/jobs/{job-id}/harness/*` exposes only the processes owned by that job.
-Use [examples/role-profiles.sample.json](./examples/role-profiles.sample.json) as the initial profile shape for per-role provider/model selection.
-The current MVP persists role profiles on the job and uses them for leader/worker routing. Planner and evaluator are provider-backed phases now, so the role profile surface matches the runtime instead of only describing it.
-The `verification` surface is read-only and combines the sprint contract, evaluator report, and role profiles into one inspection view so tester/evaluator intent is visible without re-reading the whole job state.
-The `planning`, `verification`, and `profile` views also expose the same parallel worker policy so operators can see `max_parallel_workers = 2`, leader/orchestrator approval, and disjoint write scope requirements from the read surface.
-Parallel worker fan-out is implemented in the orchestrator: `max_parallel_workers = 2`, disjoint write scopes are enforced, and worker context stays artifact-scoped and minimal.
-`approve` consumes a pending approval request and replays the blocked system step with operator consent. `reject` records an operator rejection and clears the pending approval without resuming execution.
-`cancel`, `approve`, `reject`, and `retry` are exposed as control-plane actions so operators can stop a job, approve or reject gated work, re-enter the loop, and stream events over SSE without touching the service core.
-`harness-start`, `harness-list`, `harness-status`, `harness-stop`, and `harness-view` expose the runtime process manager directly so operators can inspect and control bounded local harness processes from CLI or HTTP. Passing `-job <job-id>` switches those commands to job-scoped ownership instead of the global runtime inventory.
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for package structure, state machine, and core loop.
+
+## Documentation
+
+1. [ARCHITECTURE.md](./docs/ARCHITECTURE.md) -- package structure, state machine, core loop
+2. [IMPLEMENTATION_STATUS.md](./docs/IMPLEMENTATION_STATUS.md) -- current state, resolved issues
+3. [PRINCIPLES.md](./docs/PRINCIPLES.md) -- inviolable design principles
+4. [CODING_CONVENTIONS.md](./docs/CODING_CONVENTIONS.md) -- coding rules, extension guides
+5. [ORCHESTRATOR_SPEC_UPDATED.md](./docs/ORCHESTRATOR_SPEC_UPDATED.md) -- detailed design spec
+
+## License
+
+MIT
