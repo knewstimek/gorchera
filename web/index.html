@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Gorchera Dashboard</title>
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<header>
+		<div class="header-inner">
+			<h1>Gorchera Dashboard</h1>
+			<span id="refresh-status" class="refresh-status">Auto-refresh: ON</span>
+		</div>
+	</header>
+
+	<main>
+		<div class="sidebar">
+			<nav>
+				<button class="nav-btn active" id="btn-jobs" onclick="showPanel('jobs')">Jobs</button>
+				<button class="nav-btn" id="btn-chains" onclick="showPanel('chains')">Chains</button>
+			</nav>
+
+			<section id="panel-jobs" class="panel">
+				<div class="panel-header">
+					<h2>Jobs</h2>
+					<button class="btn-refresh" onclick="fetchJobs()">Refresh</button>
+				</div>
+				<div id="job-list" class="item-list">
+					<p class="loading">Loading...</p>
+				</div>
+			</section>
+
+			<section id="panel-chains" class="panel hidden">
+				<div class="panel-header">
+					<h2>Chains</h2>
+					<button class="btn-refresh" onclick="fetchChains()">Refresh</button>
+				</div>
+				<div id="chain-list" class="item-list">
+					<p class="loading">Loading...</p>
+				</div>
+			</section>
+		</div>
+
+		<div class="detail-area">
+			<section id="detail-panel" class="detail-panel">
+				<div id="detail-placeholder" class="placeholder">
+					<p>Select a job or chain to view details</p>
+				</div>
+
+				<div id="job-detail" class="hidden">
+					<div class="detail-header">
+						<div>
+							<h2 id="detail-job-id"></h2>
+							<p id="detail-job-goal" class="secondary"></p>
+						</div>
+						<span id="detail-job-status" class="badge"></span>
+					</div>
+
+					<div class="action-bar" id="job-actions">
+						<button class="btn btn-approve" id="btn-approve" onclick="approveCurrentJob()">Approve</button>
+						<button class="btn btn-reject" id="btn-reject" onclick="rejectCurrentJob()">Reject</button>
+					</div>
+
+					<div class="steer-box">
+						<h3>Steer Job</h3>
+						<textarea id="steer-input" placeholder="Enter steer message..." rows="3"></textarea>
+						<button class="btn btn-steer" onclick="steerCurrentJob()">Send Steer</button>
+					</div>
+
+					<div class="detail-section">
+						<h3>Token Usage</h3>
+						<div id="detail-token-usage" class="token-grid"></div>
+					</div>
+
+					<div class="detail-section">
+						<h3>Steps</h3>
+						<div id="detail-steps"></div>
+					</div>
+
+					<div class="detail-section">
+						<h3>Events</h3>
+						<div id="detail-events"></div>
+					</div>
+				</div>
+
+				<div id="chain-detail" class="hidden">
+					<div class="detail-header">
+						<div>
+							<h2 id="detail-chain-id"></h2>
+							<p id="detail-chain-goal" class="secondary"></p>
+						</div>
+						<span id="detail-chain-status" class="badge"></span>
+					</div>
+
+					<div class="detail-section">
+						<h3>Progress</h3>
+						<div id="detail-chain-progress"></div>
+					</div>
+
+					<div class="detail-section">
+						<h3>Goals</h3>
+						<div id="detail-chain-goals"></div>
+					</div>
+				</div>
+			</section>
+
+			<div id="error-banner" class="error-banner hidden"></div>
+		</div>
+	</main>
+
+	<script src="app.js" defer></script>
+</body>
+</html>

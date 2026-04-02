@@ -137,6 +137,82 @@ When extending the chain system, make changes in this order.
    - Update `docs/IMPLEMENTATION_STATUS.md` for newly available behavior.
    - Update `docs/PRINCIPLES.md` if the change affects non-bypassable invariants.
 
+## Extension Guide: Adding a New Rubric Axis
+
+Rubric axes let an operator require minimum quality scores on named dimensions (e.g., "correctness", "coverage").
+
+1. **Domain model** (`internal/domain/types.go`):
+   - `RubricAxis` struct has `Name string`, `Weight float64`, and `MinThreshold float64`.
+   - `VerificationContract.RubricAxes []RubricAxis` holds the declared axes.
+   - `RubricScore` struct has `Axis string`, `Score float64`, `Passed bool`.
+   - `EvaluatorReport.RubricScores []RubricScore` holds per-axis results from the provider.
+   - No new fields need to be added for a new axis -- axes are data, not code.
+
+2. **Contract definition** (`internal/orchestrator/verification.go`):
+   - Add the axis name and `min_threshold` to the `rubric_axes` array in the verification contract that is materialized during planning.
+   - The threshold is a float64 in [0,1] or [0,100] depending on convention; be consistent with existing axes.
+
+3. **Evaluator enforcement** (`internal/orchestrator/evaluator.go` -- `mergeEvaluatorReport()`):
+   - The enforcement loop at lines 197-225 iterates `verification.RubricAxes`, builds a threshold map by name, and checks each `providerReport.RubricScores` entry.
+   - Any axis score below its threshold causes the report to be demoted to `status="failed"`.
+   - This is purely data-driven: no code change is needed when adding a new axis to a contract.
+
+4. **Provider prompt** (`internal/provider/protocol.go`):
+   - The evaluator prompt already injects a `rubricSection` dynamically in `buildEvaluatorPrompt()` when `RubricAxes` is non-empty.
+   - The section lists each axis name, its `min_threshold`, and `weight` so the provider knows what to score.
+   - No code change is needed for a new axis; the builder iterates the contract's `RubricAxes` slice automatically.
+
+5. **Tests**: add a `mergeEvaluatorReport` table-driven test covering the new axis's pass and fail thresholds.
+
+## Extension Guide: Adding a New Context Mode
+
+Context modes control how much job state is serialized into the leader prompt. Current modes: `full`, `summary`, `minimal`, `auto`.
+
+1. **Normalization** (`internal/orchestrator/planning.go` -- `normalizeContextMode()`):
+   - Add a new `case "yourmode":` returning the canonical string.
+   - The function is the single canonicalization point; no other place needs to know about raw user input.
+
+2. **Payload builder** (`internal/provider/protocol.go` -- `buildLeaderJobPayload()`):
+   - Add a `case "yourmode":` that calls a new `buildYourModePayload(job)` function.
+   - Model the builder after `buildSummaryPayload()` (keeps goal, summary, step list with truncation) or `buildMinimalPayload()` (keeps only counts and last step).
+   - The builder must set `ContextMode` in the serialized struct to the canonical mode string.
+
+3. **Auto-resolution** (`internal/provider/protocol.go` -- `autoContextMode()`):
+   - If the new mode should be selected automatically based on step count, add a threshold range in `autoContextMode()`.
+   - Current thresholds: `<10` steps -> `full`; `10-20` -> `summary`; `>20` -> `minimal`.
+
+4. **Documentation comment** in `CreateJobInput.ContextMode` (`internal/orchestrator/service.go`):
+   - Update the inline comment (currently `// full | summary | minimal; empty defaults to "full"`) to include the new mode.
+
+5. **Tests**: add a `buildLeaderJobPayload` / `buildYourModePayload` unit test confirming the new mode omits or includes the expected fields.
+
+## Extension Guide: Adding a New Strictness Level
+
+Strictness levels control which step types are required and how the evaluator interprets completion. Current levels: `strict`, `normal`, `lenient`, `auto`.
+
+1. **Normalization** (`internal/orchestrator/planning.go` -- `normalizeStrictnessLevel()`):
+   - Add a `case "yourlevel":` returning the canonical string.
+   - `auto` is intentionally passed through to `ensurePlanning()`; new levels that are resolved before planning should be handled the same way.
+
+2. **Sprint contract thresholds** (`internal/orchestrator/planning.go` -- `buildSprintContract()`):
+   - Add a `case "yourlevel":` inside the `switch level` block.
+   - Populate `required []string` (required step types), `thresholdSuccessCnt`, and `thresholdMinSteps` to match the level's semantics.
+
+3. **Verification satisfaction** (`internal/orchestrator/evaluator.go` -- `verificationSatisfiedForLevel()`):
+   - Add a `case "yourlevel":` that calls the appropriate `verificationSatisfied*` helper or implements inline logic.
+   - For lenient-like levels: delegate to `missingRequiredSteps` with the contract's `RequiredStepTypes`.
+   - For strict-like levels: delegate to `verificationSatisfied` which checks for a test worker with artifacts.
+
+4. **Merge override logic** (`internal/orchestrator/evaluator.go` -- `mergeEvaluatorReport()`):
+   - If the new level should override the provider's verdict (like `normal` does for rule-passed jobs), add the corresponding guard with an explanatory comment.
+
+5. **Provider filter** (`internal/orchestrator/evaluator.go` -- `filterProviderMissingStepTypes()`):
+   - Decide which provider-reported missing step types should be surfaced at the new level; add the corresponding filter logic.
+
+6. **Tests**: add table-driven test rows in the `mergeEvaluatorReport` and `buildSprintContract` test suites for the new level.
+
+7. **Documentation**: update `docs/ARCHITECTURE.md` strictness section and `docs/IMPLEMENTATION_STATUS.md`.
+
 ## Test Style
 
 - Prefer focused table-driven tests for validation and routing.

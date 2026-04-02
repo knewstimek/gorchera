@@ -92,6 +92,12 @@ Completion semantics:
 - Otherwise `advanceChain()` marks the current goal `done` and starts the next pending goal in the same workspace.
 - If the last goal finishes, the whole chain becomes `done`.
 
+Chain result forwarding:
+- When a chain goal completes as `done`, `advanceChain()` builds a `ChainContext{Summary, EvaluatorReportRef}` from the completed job.
+- This context is passed to `startChainGoal()` and attached to the next job as `job.ChainContext`.
+- The planner prompt includes a "Previous chain step results" section when `job.ChainContext` is non-nil, so each goal can build on prior work.
+- First-goal jobs serialize without a `chain_context` field (pointer + omitempty).
+
 Terminal propagation:
 - A chained job ending in `blocked` or `failed` marks the current goal `failed` and the whole chain `failed`.
 - `cancelled` is terminal for the chain and prevents later advancement.
@@ -118,10 +124,26 @@ Leader prompts are shaped by `job.ContextMode` through `buildLeaderJobPayload()`
 - `full`: full marshaled job JSON
 - `summary`: compact summary with all steps, but only the last two steps retain full detail
 - `minimal`: aggregate counters plus the last step only
+- `auto`: passed through to the payload builder unchanged; the builder selects the actual mode at runtime based on current step count
 
 Normalization:
 - Empty or unrecognized values are normalized to `full`
+- `auto` is passed through so the payload builder can resolve it at runtime
 - Chain goals carry their own `context_mode`, which is copied into the job created for that goal
+
+## Auto Context Mode
+
+When `context_mode` is set to `"auto"`, `normalizeContextMode()` in planning.go passes the value through unchanged. The leader payload builder (`buildLeaderJobPayload()` in protocol.go) then selects the actual mode at runtime via `autoContextMode()` (protocol.go):
+
+Step-count thresholds used by `autoContextMode(model, stepCount)`:
+- `stepCount < 10`: `full` -- full marshaled job JSON
+- `10 <= stepCount <= 20`: `summary` -- compact summary, last two steps retain full detail
+- `stepCount > 20`: `minimal` -- aggregate counters plus the last step only
+
+The `model` parameter is accepted for forward compatibility (future per-model tuning) but is not used in the current threshold logic.
+
+- This lets long-running jobs shift from `full` context to `summary` or `minimal` automatically as step count grows.
+- The `auto` value is exposed in `gorchera_start_job` and per-goal in `gorchera_start_chain`.
 
 Important detail:
 - `SupervisorDirective` is removed from the serialized job payload and injected as a dedicated prompt section ahead of job state. This keeps the directive high-priority and prevents it from being duplicated inside summaries.
@@ -157,6 +179,13 @@ Resolution path in `SessionManager`:
 Adapter-specific model behavior:
 - Claude passes the selected `profile.Model` through `--model`
 - Codex passes `--model` only when the model name looks like a GPT-family Codex model; Claude shorthand values such as `opus` and `sonnet` are intentionally suppressed
+- Codex adapter always passes `--fresh` to prevent session reuse and reduce hang probability
+
+Role overrides on chains:
+- Each `ChainGoal` carries `RoleOverrides map[string]RoleProfile` alongside its other per-goal fields.
+- MCP `gorchera_start_chain` accepts a `role_overrides` object per goal entry.
+- `startChainGoal()` copies `goal.RoleOverrides` into `CreateJobInput.RoleOverrides` when creating the job for that step.
+- Resolution priority inside the job: `RoleOverrides[role]` > `RoleProfiles[role]` > job provider > mock fallback.
 
 Stored but not fully enforced yet:
 - `fallback_model`
@@ -266,11 +295,71 @@ HTTP API:
 - `/jobs/{id}/resume`, `/approve`, `/reject`, `/retry`, `/cancel`
 - `/harness/*` and `/jobs/{id}/harness/*`
 
-MCP:
-- job tools: start, list, status, events, artifacts, approve, reject, retry, cancel, resume
-- chain tools: start, status, pause, resume, cancel, skip
+MCP (17 tools):
+- job tools: `gorchera_start_job`, `gorchera_list_jobs`, `gorchera_status`, `gorchera_events`, `gorchera_artifacts`, `gorchera_approve`, `gorchera_reject`, `gorchera_retry`, `gorchera_cancel`, `gorchera_resume`
+- chain tools: `gorchera_start_chain`, `gorchera_chain_status`, `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, `gorchera_skip_chain_goal`
 - steer tool: `gorchera_steer`
+- `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `max_steps`, `strictness_level`, `context_mode` (supports `auto`)
+- `gorchera_start_chain` key parameters: `workspace_dir`, `goals[]` with per-goal `goal`, `provider`, `strictness_level`, `context_mode`, `max_steps`, `role_overrides`
 - `wait=true` is supported on `gorchera_status` and `gorchera_chain_status` with 2-second polling
-- Omitted `wait_timeout` defaults to 30 seconds
-- `wait_timeout=0` preserves the original 5-minute timeout
+- Omitted `wait_timeout` defaults to 30 seconds; `wait_timeout=0` preserves the 5-minute maximum
 - Positive `wait_timeout` values are interpreted as seconds
+
+## Evaluator Rubric Scoring
+
+Rubric axes allow the planner to define multi-dimensional evaluation criteria in the `VerificationContract`.
+
+Schema (domain/types.go):
+- `RubricAxis`: `{name string, weight float64, min_threshold float64}`
+- `RubricScore`: `{axis string, score float64, passed bool}`
+- `VerificationContract.RubricAxes []RubricAxis` -- axes defined by the planner
+- `EvaluatorReport.RubricScores []RubricScore` -- per-axis scores returned by the provider
+
+Enforcement in `mergeEvaluatorReport()` (evaluator.go):
+- Applied only when both `verification.RubricAxes` and `providerReport.RubricScores` are non-empty.
+- Additive enforcement: existing pass/fail logic (step coverage, strictness-level rules) runs first; rubric can only demote a passing report, never promote a failing one.
+- Each reported score is checked against its `min_threshold`; axes below threshold are collected in `failedAxes`.
+- If any axis fails: `report.Passed = false`, `report.Status = "failed"`, reason lists each failed axis with its score and threshold.
+
+Evaluator prompt:
+- When rubric axes are present in the verification contract, the evaluator prompt includes a `RUBRIC SCORING` section.
+- The evaluator must score each axis on a 0.0-1.0 scale with one-sentence reasoning per axis.
+
+## Adaptive Decomposition (strictness=auto)
+
+When `strictness_level` is set to `"auto"`, the planner chooses the evaluation level dynamically.
+
+Resolution path in `ensurePlanning()` (planning.go):
+1. Job is created with `StrictnessLevel = "auto"` (normalizeStrictnessLevel passes it through).
+2. After the planner phase runs, the planner output fields `RecommendedStrictness` and `RecommendedMaxSteps` are read.
+3. If `RecommendedStrictness` is one of `strict | normal | lenient`, it is applied to `job.StrictnessLevel`.
+4. If the recommendation is empty or unrecognised, `job.StrictnessLevel` falls back to `"normal"`.
+5. If `RecommendedMaxSteps > 0`, `job.MaxSteps` is updated.
+6. The resolved level is used for the rest of the job lifecycle: sprint contract, evaluator gate, step-type thresholds.
+
+Planner guidance (protocol.go):
+- The planner prompt instructs the planner to recommend strictness based on goal complexity and model capabilities.
+- Stronger models (opus) can handle stricter evaluation with fewer steps.
+- Weaker models (sonnet, haiku) benefit from normal strictness and more steps.
+
+Fallback:
+- If the planner phase is skipped (unsupported phase), `"auto"` reaching `buildSprintContract()` is treated as `"normal"`.
+
+## Planner Prompt Enhancement
+
+`buildPlannerPrompt()` in protocol.go includes several sections beyond the raw job JSON.
+
+Role profiles section:
+- A formatted list of all role profiles (planner, leader, executor, reviewer, tester, evaluator) is appended.
+- Each entry shows `role: provider/model`, e.g. `executor: claude/sonnet`.
+- This informs the planner's `recommended_strictness` and `recommended_max_steps` so it can calibrate for actual model capability.
+
+Chain context section:
+- When `job.ChainContext` is non-nil, a "Previous chain step results" section is injected with the prior step's summary and evaluator report reference.
+- Allows the planner to scope the current goal relative to what the previous chain step accomplished.
+
+Codebase analysis instruction:
+- The planner is instructed to read relevant source files before writing the spec to ground the plan in current reality rather than assumptions.
+
+Measurable acceptance criteria:
+- The planner prompt requires acceptance criteria to be verifiable (e.g. `go test ./... exits 0`), not vague (e.g. "code is clean").

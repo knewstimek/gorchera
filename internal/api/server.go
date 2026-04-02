@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -23,12 +24,21 @@ func NewServer(orchestrator *orchestrator.Service) *Server {
 }
 
 func (s *Server) Handler() http.Handler {
+	// Windows registry maps .js to text/plain -- override to correct MIME types.
+	mime.AddExtensionType(".js", "application/javascript")
+	mime.AddExtensionType(".css", "text/css")
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/jobs", s.handleJobs)
 	mux.HandleFunc("/jobs/", s.handleJob)
 	mux.HandleFunc("/harness", s.handleHarness)
 	mux.HandleFunc("/harness/", s.handleHarness)
+	mux.HandleFunc("/chains", s.handleChains)
+	mux.HandleFunc("/chains/", s.handleChain)
+	// Serve static dashboard files from the web/ directory.
+	fs := http.FileServer(http.Dir("web"))
+	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", fs))
 	// Wrap all routes with bearer token auth when GORCHERA_AUTH_TOKEN is set.
 	// If the env var is empty/unset, auth is skipped (development mode).
 	token := os.Getenv("GORCHERA_AUTH_TOKEN")
@@ -205,6 +215,23 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, job)
 		return
+	case rest == "steer":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req SteerJobRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		job, err := s.orchestrator.Steer(r.Context(), jobID, req.Message)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
+		return
 	case strings.HasPrefix(rest, "events/stream"):
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -375,4 +402,35 @@ func decodeJSONBody(r *http.Request, target any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	chains, err := s.orchestrator.ListChains(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, chains)
+}
+
+func (s *Server) handleChain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	chainID := strings.TrimPrefix(r.URL.Path, "/chains/")
+	if chainID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	chain, err := s.orchestrator.GetChain(r.Context(), chainID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, chain)
 }

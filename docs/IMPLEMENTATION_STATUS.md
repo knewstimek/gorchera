@@ -19,6 +19,9 @@ go test ./...    # PASS
   - `strict`: requires succeeded `implement`, `review`, and `test`
   - `normal`: requires succeeded `implement`; verification can be satisfied by succeeded `test`, `build`, or `command`
   - `lenient`: can accept provider pass with minimal structural coverage
+  - `auto`: defers level selection to the planner phase; planner's `recommended_strictness` and `recommended_max_steps` are adopted before the sprint contract is built; falls back to `normal` if recommendation is absent or unrecognised
+- Evaluator rubric scoring: `VerificationContract.RubricAxes` defines per-axis thresholds (`name`, `weight`, `min_threshold`). The provider evaluator returns `RubricScores` (0.0-1.0 per axis). `mergeEvaluatorReport()` enforces thresholds additively -- rubric can only demote a passing report, never promote a failing one.
+- Planner prompt includes role profiles (provider/model per role) to inform `recommended_strictness` and `recommended_max_steps`; chain context section injected when `job.ChainContext` is present.
 - Leader summarize throttling: after two consecutive summarize turns, the service forces completion evaluation instead of allowing endless summary churn.
 - Repeated blocked-reason protection: the same blocked reason three times in a row escalates to job failure.
 - Rough token/cost accounting using serialized input/output heuristics.
@@ -35,6 +38,7 @@ go test ./...    # PASS
 - Real Codex CLI adapter:
   - `codex exec`
   - `--output-schema`
+  - `--fresh` flag (always passed to prevent session reuse and reduce hang probability)
   - workspace-write sandbox
   - stdin prompt delivery
   - role-specific GPT-family model selection
@@ -74,6 +78,8 @@ go test ./...    # PASS
 - Persisted `JobChain` state with sequential goal execution.
 - Per-goal fields for provider, strictness level, context mode, max steps, job ID, and goal status.
 - Automatic next-goal start after evaluator-approved completion of the current goal.
+- Chain result forwarding: completed job's `Summary` and `EvaluatorReportRef` are packaged as `ChainContext` and passed to the next goal's planner prompt.
+- Per-goal `role_overrides`: each `ChainGoal` supports `map[string]RoleProfile` overrides; MCP `gorchera_start_chain` exposes these as per-goal `role_overrides` objects.
 - Terminal propagation from blocked/failed chained jobs to chain failure.
 - Chain controls are implemented:
   - pause
@@ -86,7 +92,8 @@ go test ./...    # PASS
 
 ### Context shaping and steering
 
-- Leader `context_mode` is implemented with `full`, `summary`, and `minimal` payload shapes.
+- Leader `context_mode` is implemented with `full`, `summary`, `minimal`, and `auto` payload shapes.
+  - `auto` is passed through by `normalizeContextMode()` and resolved at runtime by `autoContextMode()` in the payload builder: step count < 10 = `full`, 10-20 = `summary`, > 20 = `minimal`.
 - Context mode is normalized per job and per chain goal.
 - Supervisor steering is implemented:
   - MCP tool `gorchera_steer`
@@ -119,7 +126,8 @@ go test ./...    # PASS
   - job lifecycle tools
   - chain lifecycle tools
   - `gorchera_start_job.role_overrides`
-  - `wait=true` polling for job and chain status
+  - `gorchera_start_chain` per-goal `role_overrides`
+  - `wait=true` polling for job and chain status with configurable `wait_timeout` (default 30s, 0=5min maximum)
   - `gorchera_steer`
 
 ## Security Audit Fixes (2026-04-02)
@@ -182,7 +190,6 @@ All 10 HIGH severity findings from `docs/AUDIT_REPORT.md` have been fixed. `go b
 ### Spec gaps that remain
 
 - No milestone-based leader session reset or provider-specific context strategy orchestration beyond the prompt payload modes.
-- Evaluator scoring is still heuristic and step-coverage-based; full multi-axis scoring from the spec is not implemented.
 - `SprintContract.ThresholdMinSteps` is still generated but not used as an independent evaluator gate.
 - No artifact merge-rule validation beyond disjoint-scope parallel planning checks.
 - No browser evaluator lifecycle, dev-server readiness orchestration, or restart policy.
