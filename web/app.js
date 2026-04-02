@@ -8,6 +8,7 @@ var refreshTimer = null;
 var activeSSE = null;
 var allJobs = [];
 var allChains = [];
+var seenJobEventNotices = Object.create(null);
 // Track which lazy sections have been loaded for the current job
 var loadedSections = {};
 
@@ -74,7 +75,7 @@ function badgeClass(status) {
 }
 
 function makeBadge(status) {
-	return '<span class="badge ' + badgeClass(status) + '">' + (status || 'unknown') + '</span>';
+	return '<span class="badge ' + badgeClass(status) + '">' + esc(status || 'unknown') + '</span>';
 }
 
 // --- Time formatter ---
@@ -216,7 +217,7 @@ function renderJobList(jobs) {
 	for (var i = 0; i < jobs.length; i++) {
 		var job = jobs[i];
 		var sel = job.id === currentJobId ? ' selected' : '';
-		html += '<div class="list-item' + sel + '" data-job-id="' + esc(job.id) + '">';
+		html += '<div class="list-item newly-inserted' + sel + '" data-job-id="' + esc(job.id) + '">';
 		html += '<div class="list-item-header">';
 		html += '<span class="list-item-id job-id-copy" data-id="' + esc(job.id) + '">' + esc(job.id) + '</span>';
 		html += makeBadge(job.status);
@@ -229,6 +230,12 @@ function renderJobList(jobs) {
 		html += '</div>';
 	}
 	el.innerHTML = html;
+	// Remove newly-inserted after animation so re-renders don't re-fire slideIn
+	el.querySelectorAll('.list-item.newly-inserted').forEach(function(item) {
+		item.addEventListener('animationend', function() {
+			item.classList.remove('newly-inserted');
+		}, { once: true });
+	});
 	relativeTimeUpdate();
 	makeCopyable(el, '.job-id-copy', function(elem) { return elem.getAttribute('data-id') || ''; });
 }
@@ -242,6 +249,34 @@ function fetchJobDetail(id) {
 	}).catch(function(err) {
 		showError(err.message);
 	});
+}
+
+function isOperatorCancelledJob(job) {
+	if (!job) return false;
+	var status = String(job.status || '').toLowerCase();
+	var blockedReason = String(job.blocked_reason || '');
+	if (status === 'cancelled' || status === 'canceled') return true;
+	return status === 'blocked' && blockedReason.indexOf('cancelled by operator:') === 0;
+}
+
+function shouldStreamJob(job) {
+	if (!job) return false;
+	var status = String(job.status || '').toLowerCase();
+	if (status === 'done' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
+		return false;
+	}
+	return !isOperatorCancelledJob(job);
+}
+
+function jobEventNoticeKey(jobId, ev) {
+	return [jobId, ev.kind || '', ev.time || '', ev.message || ''].join('|');
+}
+
+function notifyJobEventOnce(jobId, ev, message, type) {
+	var key = jobEventNoticeKey(jobId, ev);
+	if (seenJobEventNotices[key]) return;
+	seenJobEventNotices[key] = true;
+	showToast(message, type);
 }
 
 function renderJobDetail(job) {
@@ -407,9 +442,7 @@ function renderEvents(events) {
 function openSSE(jobId, job) {
 	closeSSE();
 
-	var s = (job && job.status || '').toLowerCase();
-	var isTerminal = s === 'done' || s === 'failed' || s === 'cancelled' || s === 'canceled';
-	if (isTerminal) {
+	if (!shouldStreamJob(job)) {
 		setSSEIndicator('sse-off', 'Job finished');
 		return;
 	}
@@ -448,21 +481,21 @@ function openSSE(jobId, job) {
 			// When the job reaches a terminal state via SSE, close and refresh
 			var k = ev.kind || '';
 			if (k === 'job_done') {
-				showToast('Job completed: ' + jobId, 'success');
+				notifyJobEventOnce(jobId, ev, 'Job completed: ' + jobId, 'success');
 				closeSSE();
 				fetchJobDetail(jobId);
 			} else if (k === 'job_failed') {
-				showToast('Job failed: ' + jobId, 'error');
+				notifyJobEventOnce(jobId, ev, 'Job failed: ' + jobId, 'error');
 				closeSSE();
 				fetchJobDetail(jobId);
 			} else if (k === 'job_cancelled') {
-				showToast('Job cancelled: ' + jobId, 'info');
+				notifyJobEventOnce(jobId, ev, 'Job cancelled: ' + jobId, 'info');
 				closeSSE();
 				fetchJobDetail(jobId);
 			} else if (k === 'approval_requested' || k === 'waiting_approval') {
-				showToast('Approval required for: ' + jobId, 'info');
+				notifyJobEventOnce(jobId, ev, 'Approval required for: ' + jobId, 'info');
 			}
-		} catch(ex) {}
+		} catch(ex) { console.error('SSE parse error:', ex); }
 	});
 
 	es.onerror = function() {
@@ -576,7 +609,7 @@ function renderChainList(chains) {
 	for (var i = 0; i < chains.length; i++) {
 		var chain = chains[i];
 		var sel = chain.id === currentChainId ? ' selected' : '';
-		html += '<div class="list-item' + sel + '" data-chain-id="' + esc(chain.id) + '">';
+		html += '<div class="list-item newly-inserted' + sel + '" data-chain-id="' + esc(chain.id) + '">';
 		html += '<div class="list-item-header">';
 		html += '<span class="list-item-id chain-id-copy" data-id="' + esc(chain.id) + '">' + esc(chain.id) + '</span>';
 		html += makeBadge(chain.status);
@@ -600,6 +633,12 @@ function renderChainList(chains) {
 		html += '</div>';
 	}
 	el.innerHTML = html;
+	// Remove newly-inserted after animation so re-renders don't re-fire slideIn
+	el.querySelectorAll('.list-item.newly-inserted').forEach(function(item) {
+		item.addEventListener('animationend', function() {
+			item.classList.remove('newly-inserted');
+		}, { once: true });
+	});
 	relativeTimeUpdate();
 	makeCopyable(el, '.chain-id-copy', function(elem) { return elem.getAttribute('data-id') || ''; });
 }
@@ -796,11 +835,14 @@ document.addEventListener('click', function(e) {
 // --- Utility ---
 
 function esc(str) {
-	return String(str)
+	var s = String(str)
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')
 		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;');
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#x27;');
+	// Strip javascript: URI scheme to prevent protocol-handler XSS
+	return s.replace(/javascript\s*:/gi, 'javascript&#x3A;');
 }
 
 function truncate(str, n) {
@@ -844,7 +886,7 @@ function showToast(message, type) {
 	toast.className = 'toast toast-' + type;
 	toast.id = id;
 	toast.innerHTML = '<span class="toast-icon">' + (iconMap[type] || iconMap.info) + '</span>' +
-		'<span class="toast-msg">' + message + '</span>' +
+		'<span class="toast-msg">' + esc(message) + '</span>' +
 		'<button class="toast-close" onclick="dismissToast(\'' + id + '\')" aria-label="Dismiss">&times;</button>';
 	container.appendChild(toast);
 	setTimeout(function() { dismissToast(id); }, 5000);
@@ -887,16 +929,24 @@ function copyToClipboard(text, triggerEl) {
 	if (navigator.clipboard && navigator.clipboard.writeText) {
 		navigator.clipboard.writeText(text).then(function() {
 			showCopyFeedback(triggerEl);
+		}).catch(function(e) {
+			console.error('Clipboard write failed:', e);
 		});
 	} else {
-		var ta = document.createElement('textarea');
-		ta.value = text;
-		ta.style.position = 'fixed';
-		ta.style.left = '-9999px';
-		document.body.appendChild(ta);
-		ta.select();
-		try { document.execCommand('copy'); showCopyFeedback(triggerEl); } catch(e) {}
-		document.body.removeChild(ta);
+		// Fallback for contexts without Clipboard API (non-HTTPS, old browsers)
+		try {
+			var ta = document.createElement('textarea');
+			ta.value = text;
+			ta.style.position = 'fixed';
+			ta.style.left = '-9999px';
+			document.body.appendChild(ta);
+			ta.select();
+			document.execCommand('copy');
+			showCopyFeedback(triggerEl);
+			document.body.removeChild(ta);
+		} catch(e) {
+			console.error('Fallback copy failed:', e);
+		}
 	}
 }
 
@@ -957,8 +1007,8 @@ function renderSkeletons(container, count) {
 function renderEmptyState(container, title, hint) {
 	container.innerHTML = '<div class="empty-state">' +
 		'<div class="empty-state-icon"><svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" stroke="#607D8B" stroke-width="2" stroke-dasharray="4 4"/><path d="M18 22h12M18 28h8" stroke="#607D8B" stroke-width="2" stroke-linecap="round"/></svg></div>' +
-		'<div class="empty-state-title">' + title + '</div>' +
-		'<div class="empty-state-hint">' + hint + '</div>' +
+		'<div class="empty-state-title">' + esc(title) + '</div>' +
+		'<div class="empty-state-hint">' + esc(hint) + '</div>' +
 		'</div>';
 }
 
