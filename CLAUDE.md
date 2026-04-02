@@ -1,6 +1,6 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
-Gorechera -- Go 상태 기반 멀티 에이전트 오케스트레이션 엔진 (대화형 비서 아님, 워크플로 엔진).
+Gorchera -- Go 상태 기반 멀티 에이전트 오케스트레이션 엔진 (대화형 비서 아님, 워크플로 엔진).
 
 ## 빌드 & 검증
 
@@ -28,7 +28,7 @@ go test ./...
 - MCP server 구현 완료 (10개 도구, notification 지원)
 - Leader 프롬프트에 sprint contract + strictness 규칙 삽입
 - Evaluator retry loop (blocked -> leader 재시도, 무한루프 방어)
-- GitHub: https://github.com/knewstimek/gorechera
+- GitHub: https://github.com/knewstimek/gorchera
 
 ## 문서 읽기 순서
 
@@ -40,7 +40,7 @@ go test ./...
 
 ## 코드 진입점
 
-- `cmd/gorechera/main.go` -- CLI
+- `cmd/gorchera/main.go` -- CLI
 - `internal/orchestrator/service.go` -- 핵심 루프
 - `internal/provider/provider.go` -- 어댑터 인터페이스
 - `internal/provider/protocol.go` -- 프롬프트/스키마

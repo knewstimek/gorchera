@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
-	runtimeexec "gorechera/internal/runtime"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
+	runtimeexec "gorchera/internal/runtime"
 )
 
 type RuntimeProcessListView struct {

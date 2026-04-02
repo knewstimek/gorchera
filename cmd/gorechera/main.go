@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"gorechera/internal/api"
-	"gorechera/internal/domain"
-	"gorechera/internal/mcp"
-	"gorechera/internal/orchestrator"
-	"gorechera/internal/provider"
-	"gorechera/internal/provider/mock"
-	runtimeexec "gorechera/internal/runtime"
-	"gorechera/internal/store"
+	"gorchera/internal/api"
+	"gorchera/internal/domain"
+	"gorchera/internal/mcp"
+	"gorchera/internal/orchestrator"
+	"gorchera/internal/provider"
+	"gorchera/internal/provider/mock"
+	runtimeexec "gorchera/internal/runtime"
+	"gorchera/internal/store"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	rootDir := filepath.Join(".", ".gorechera")
+	rootDir := filepath.Join(".", ".gorchera")
 	workspaceRoot, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
@@ -531,7 +531,7 @@ func serve(service *orchestrator.Service, args []string) {
 	fs.Parse(args)
 
 	server := api.NewServer(service)
-	fmt.Printf("gorechera API listening on %s\n", *addr)
+	fmt.Printf("gorchera API listening on %s\n", *addr)
 	log.Fatal(http.ListenAndServe(*addr, server.Handler()))
 }
 
@@ -559,7 +559,7 @@ func printJSON(v any) {
 }
 
 func usage() {
-	fmt.Println("gorechera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|mcp> [flags]")
+	fmt.Println("gorchera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|mcp> [flags]")
 }
 
 func loadRoleProfiles(path string, base domain.ProviderName) (domain.RoleProfiles, error) {

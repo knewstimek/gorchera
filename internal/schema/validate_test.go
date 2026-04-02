@@ -3,7 +3,7 @@ package schema
 import (
 	"testing"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 func TestValidateLeaderOutputRunWorkerRequiresFields(t *testing.T) {

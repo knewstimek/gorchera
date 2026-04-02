@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
-	"gorechera/internal/provider"
-	"gorechera/internal/provider/mock"
-	runtimeexec "gorechera/internal/runtime"
-	"gorechera/internal/store"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
+	"gorchera/internal/provider"
+	"gorchera/internal/provider/mock"
+	runtimeexec "gorchera/internal/runtime"
+	"gorchera/internal/store"
 )
 
 func TestServiceStartCompletesMockLoop(t *testing.T) {

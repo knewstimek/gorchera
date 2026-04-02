@@ -1,8 +1,8 @@
-# Gorechera Principles
+﻿# Gorchera Principles
 
 ## Core Identity
 
-Gorechera는 AI가 아니라 일반 프로그램이다.
+Gorchera는 AI가 아니라 일반 프로그램이다.
 상태 관리자이자 라우터이며, 메시지를 이해하려 하지 않는다.
 
 ## 깨면 안 되는 원칙

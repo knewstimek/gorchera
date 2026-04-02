@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
 )
 
-// Server is an MCP stdio server that exposes Gorechera as a set of tools.
+// Server is an MCP stdio server that exposes Gorchera as a set of tools.
 // It reads newline-delimited JSON-RPC 2.0 requests from stdin and writes
 // responses to stdout. stderr is left untouched so the host process can
 // capture log output separately.
@@ -57,7 +57,7 @@ func (s *Server) listenEvents() {
 			"method":  "notifications/message",
 			"params": map[string]any{
 				"level":  "info",
-				"logger": "gorechera",
+				"logger": "gorchera",
 				"data": map[string]string{
 					"job_id":  event.JobID,
 					"kind":    event.Kind,
@@ -179,7 +179,7 @@ func (s *Server) handleInitialize(req jsonRPCRequest) *jsonRPCResponse {
 	result := map[string]any{
 		"protocolVersion": "2024-11-05",
 		"serverInfo": map[string]string{
-			"name":    "gorechera",
+			"name":    "gorchera",
 			"version": "1.0.0",
 		},
 		"capabilities": map[string]any{
@@ -197,8 +197,8 @@ func (s *Server) handleInitialize(req jsonRPCRequest) *jsonRPCResponse {
 func toolList() []toolDef {
 	return []toolDef{
 		{
-			Name:        "gorechera_start_job",
-			Description: "Start a new Gorechera job. The job runs asynchronously; use gorechera_status to poll progress.",
+			Name:        "gorchera_start_job",
+			Description: "Start a new Gorchera job. The job runs asynchronously; use gorchera_status to poll progress.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
@@ -213,7 +213,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_start_chain",
+			Name:        "gorchera_start_chain",
 			Description: "Start a sequential chain of jobs. The first goal starts immediately and later goals start only after the previous job finishes successfully.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -239,12 +239,12 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_list_jobs",
+			Name:        "gorchera_list_jobs",
 			Description: "List all jobs.",
 			InputSchema: toolInputSchema{Type: "object"},
 		},
 		{
-			Name:        "gorechera_status",
+			Name:        "gorchera_status",
 			Description: "Get the current status of a job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -255,7 +255,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_chain_status",
+			Name:        "gorchera_chain_status",
 			Description: "Get the current status of a sequential job chain.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -266,7 +266,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_events",
+			Name:        "gorchera_events",
 			Description: "Get recent events for a job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -278,7 +278,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_artifacts",
+			Name:        "gorchera_artifacts",
 			Description: "Get artifact paths produced by a job (planning artifacts + step artifacts).",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -289,7 +289,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_approve",
+			Name:        "gorchera_approve",
 			Description: "Approve a pending approval on a job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -300,7 +300,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_reject",
+			Name:        "gorchera_reject",
 			Description: "Reject a pending approval on a job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -312,7 +312,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_retry",
+			Name:        "gorchera_retry",
 			Description: "Retry a blocked or failed job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -323,7 +323,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_cancel",
+			Name:        "gorchera_cancel",
 			Description: "Cancel a job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -335,7 +335,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_resume",
+			Name:        "gorchera_resume",
 			Description: "Resume a blocked job.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -346,7 +346,7 @@ func toolList() []toolDef {
 			},
 		},
 		{
-			Name:        "gorechera_steer",
+			Name:        "gorchera_steer",
 			Description: "Inject a supervisor directive into a running job. The next leader call will see this directive with highest priority.",
 			InputSchema: toolInputSchema{
 				Type: "object",
@@ -389,31 +389,31 @@ func (s *Server) handleToolCall(req jsonRPCRequest) *jsonRPCResponse {
 	)
 
 	switch p.Name {
-	case "gorechera_start_job":
+	case "gorchera_start_job":
 		result, err = s.toolStartJob(ctx, args)
-	case "gorechera_start_chain":
+	case "gorchera_start_chain":
 		result, err = s.toolStartChain(ctx, args)
-	case "gorechera_list_jobs":
+	case "gorchera_list_jobs":
 		result, err = s.toolListJobs(ctx)
-	case "gorechera_status":
+	case "gorchera_status":
 		result, err = s.toolStatus(ctx, args)
-	case "gorechera_chain_status":
+	case "gorchera_chain_status":
 		result, err = s.toolChainStatus(ctx, args)
-	case "gorechera_events":
+	case "gorchera_events":
 		result, err = s.toolEvents(ctx, args)
-	case "gorechera_artifacts":
+	case "gorchera_artifacts":
 		result, err = s.toolArtifacts(ctx, args)
-	case "gorechera_approve":
+	case "gorchera_approve":
 		result, err = s.toolApprove(ctx, args)
-	case "gorechera_reject":
+	case "gorchera_reject":
 		result, err = s.toolReject(ctx, args)
-	case "gorechera_retry":
+	case "gorchera_retry":
 		result, err = s.toolRetry(ctx, args)
-	case "gorechera_cancel":
+	case "gorchera_cancel":
 		result, err = s.toolCancel(ctx, args)
-	case "gorechera_resume":
+	case "gorchera_resume":
 		result, err = s.toolResume(ctx, args)
-	case "gorechera_steer":
+	case "gorchera_steer":
 		result, err = s.toolSteer(ctx, args)
 	default:
 		return errorResp(req.ID, -32602, fmt.Sprintf("unknown tool: %s", p.Name))

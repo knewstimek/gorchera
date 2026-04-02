@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"testing"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 func TestVerificationSatisfiedNormalAcceptsBuildWithoutReview(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
 )
 
 type Server struct {

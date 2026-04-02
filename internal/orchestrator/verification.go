@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 type VerificationContract struct {

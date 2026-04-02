@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 func TestStateStoreSaveLoadAndListChains(t *testing.T) {

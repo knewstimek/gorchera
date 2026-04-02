@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/schema"
+	"gorchera/internal/domain"
+	"gorchera/internal/schema"
 )
 
 const maxParallelWorkers = 2

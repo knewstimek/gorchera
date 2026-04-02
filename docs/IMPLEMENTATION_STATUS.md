@@ -1,4 +1,4 @@
-# Gorechera Implementation Status
+﻿# Gorchera Implementation Status
 
 Last verified: 2026-04-02 (TOCTOU fix applied)
 
@@ -114,7 +114,7 @@ All known bugs have been fixed (2026-04-02, TOCTOU fixed separately).
 
 mock/mock.go is for testing only:
 - Parallel fan-out triggers only when goal contains "parallel" (mock.go:47)
-- RunPlanner hardcodes Gorechera-specific strings (mock.go:123-178)
+- RunPlanner hardcodes Gorchera-specific strings (mock.go:123-178)
 - RunWorker creates no actual files, returns artifact names only (mock.go:207-233)
 - RunEvaluator checks step type coverage only (mock.go:180-205)
 
@@ -124,12 +124,12 @@ Currently at Phase 1. Known bugs fixed. Next:
 
 1. **Phase 1** (current): Real Claude adapter + provider-backed planning
 2. **Phase 2**: Error classification + retry 3-strike + blocked_reason standardization
-3. **Phase 3**: Run Gorechera on itself as a job, evaluator verifies `go build && go test`
+3. **Phase 3**: Run Gorchera on itself as a job, evaluator verifies `go build && go test`
 4. **Phase 4**: Human-supervised self-hosting loop
 
 ## Recent Update
 
 2026-04-02:
 - Added persisted sequential job chaining in `internal/domain/types.go`, `internal/store/state_store.go`, and `internal/orchestrator/service.go`
-- Added MCP chain tools: `gorechera_start_chain` and `gorechera_chain_status`
+- Added MCP chain tools: `gorchera_start_chain` and `gorchera_chain_status`
 - Added focused store/service/MCP tests covering chain persistence, first-goal start, sequential advancement, final done, and terminal failure stop behavior

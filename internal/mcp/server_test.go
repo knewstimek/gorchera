@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
-	"gorechera/internal/provider"
-	"gorechera/internal/provider/mock"
-	"gorechera/internal/store"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
+	"gorchera/internal/provider"
+	"gorchera/internal/provider/mock"
+	"gorchera/internal/store"
 )
 
 func TestToolStartJobRejectsInvalidWorkspaceBeforeExecution(t *testing.T) {
@@ -22,7 +22,7 @@ func TestToolStartJobRejectsInvalidWorkspaceBeforeExecution(t *testing.T) {
 	server, service, root := newTestServer(t, mock.New())
 	missingWorkspace := filepath.Join(root, "missing-workspace")
 
-	resp := server.handleToolCall(mustToolCallRequest(t, "gorechera_start_job", map[string]any{
+	resp := server.handleToolCall(mustToolCallRequest(t, "gorchera_start_job", map[string]any{
 		"goal":          "Reject invalid MCP workspace",
 		"provider":      string(domain.ProviderMock),
 		"workspace_dir": missingWorkspace,
@@ -105,7 +105,7 @@ func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	server, service, _ := newTestServer(t, control)
 	workspace := t.TempDir()
 
-	resp := server.handleToolCall(mustToolCallRequest(t, "gorechera_start_chain", map[string]any{
+	resp := server.handleToolCall(mustToolCallRequest(t, "gorchera_start_chain", map[string]any{
 		"workspace_dir": workspace,
 		"goals": []map[string]any{
 			{
@@ -165,7 +165,7 @@ func TestToolStartJobRejectsRelativeWorkspaceBeforeExecution(t *testing.T) {
 
 	server, service, root := newTestServer(t, mock.New())
 
-	resp := server.handleToolCall(mustToolCallRequest(t, "gorechera_start_job", map[string]any{
+	resp := server.handleToolCall(mustToolCallRequest(t, "gorchera_start_job", map[string]any{
 		"goal":          "Reject relative MCP workspace",
 		"provider":      string(domain.ProviderMock),
 		"workspace_dir": "relative\\workspace",

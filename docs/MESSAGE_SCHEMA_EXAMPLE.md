@@ -1,7 +1,7 @@
-# MESSAGE_SCHEMA_EXAMPLE.md
+﻿# MESSAGE_SCHEMA_EXAMPLE.md
 
 ## Purpose
-이 문서는 Gorechera 오케스트레이터와 리더/워커 에이전트가 주고받는 메시지 형식의 예시를 정의한다.
+이 문서는 Gorchera 오케스트레이터와 리더/워커 에이전트가 주고받는 메시지 형식의 예시를 정의한다.
 이 문서는 예시 문서이며, 실제 구현에서는 이 구조를 코드로 검증해야 한다.
 
 ## Scope

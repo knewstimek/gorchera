@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/provider"
+	"gorchera/internal/domain"
+	"gorchera/internal/provider"
 )
 
 func (s *Service) ensurePlanning(ctx context.Context, job *domain.Job) error {

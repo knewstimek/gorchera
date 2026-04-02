@@ -1,9 +1,9 @@
-# Gorechera Architecture
+# Gorchera Architecture
 
 ## Package Structure
 
 ```
-cmd/gorechera/main.go           -- CLI entrypoint, flag parsing, command routing
+cmd/gorchera/main.go           -- CLI entrypoint, flag parsing, command routing
 internal/
   domain/types.go               -- ALL domain types (Job, JobChain, ChainGoal, Step, TokenUsage, Event, LeaderOutput, WorkerOutput, etc.)
   orchestrator/
@@ -188,7 +188,7 @@ leader returns run_workers with exactly 2 tasks
 - Worker artifacts: MaterializeWorkerArtifacts -> uses FileContents when available, falls back to summary JSON
 - System artifacts: MaterializeSystemResult -> full runtime.Result JSON (stdout, stderr, exit code, timing)
 - Planning artifacts: MaterializeTextArtifact (markdown) + MaterializeJSONArtifact (structured data)
-- All stored under `.gorechera/{jobID}/`
+- All stored under `.gorchera/{jobID}/`
 - Worker artifact filenames: `step-{NN}-{sanitized_name}`
 
 ## HTTP Routing
@@ -224,9 +224,9 @@ To add a new route: add a case in the sub-path switch inside handleJob (server.g
 ## MCP Tooling
 
 The MCP stdio server exposes both single-job and chain lifecycle tools:
-- `gorechera_start_job`, `gorechera_status`, `gorechera_list_jobs`, `gorechera_events`, `gorechera_artifacts`
-- `gorechera_start_chain`, `gorechera_chain_status`
-- control-plane tools: `gorechera_approve`, `gorechera_reject`, `gorechera_retry`, `gorechera_cancel`, `gorechera_resume`, `gorechera_steer`
+- `gorchera_start_job`, `gorchera_status`, `gorchera_list_jobs`, `gorchera_events`, `gorchera_artifacts`
+- `gorchera_start_chain`, `gorchera_chain_status`
+- control-plane tools: `gorchera_approve`, `gorchera_reject`, `gorchera_retry`, `gorchera_cancel`, `gorchera_resume`, `gorchera_steer`
 
 ## CLI Command Pattern
 

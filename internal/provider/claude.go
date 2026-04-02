@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 type ClaudeAdapter struct {

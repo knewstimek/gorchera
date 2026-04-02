@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 func (s *Service) evaluateCompletion(ctx context.Context, job *domain.Job) (*domain.EvaluatorReport, error) {

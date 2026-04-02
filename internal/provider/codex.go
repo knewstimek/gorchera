@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 type CodexAdapter struct {
@@ -82,7 +82,7 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 	}
 	defer os.RemoveAll(filepath.Dir(schemaPath))
 
-	outputDir, err := os.MkdirTemp(firstNonEmpty(workspaceDir, os.TempDir()), "gorechera-codex-*")
+	outputDir, err := os.MkdirTemp(firstNonEmpty(workspaceDir, os.TempDir()), "gorchera-codex-*")
 	if err != nil {
 		return "", invalidResponseError(a.Name(), a.executable, "failed to create output directory", err)
 	}

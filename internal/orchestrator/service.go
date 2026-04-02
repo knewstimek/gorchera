@@ -1,4 +1,4 @@
-package orchestrator
+﻿package orchestrator
 
 import (
 	"bytes"
@@ -14,12 +14,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/policy"
-	"gorechera/internal/provider"
-	runtimeexec "gorechera/internal/runtime"
-	"gorechera/internal/schema"
-	"gorechera/internal/store"
+	"gorchera/internal/domain"
+	"gorchera/internal/policy"
+	"gorchera/internal/provider"
+	runtimeexec "gorchera/internal/runtime"
+	"gorchera/internal/schema"
+	"gorchera/internal/store"
 )
 
 var ErrHarnessOwnershipMismatch = errors.New("harness process not owned by job")

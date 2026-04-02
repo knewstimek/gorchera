@@ -1,14 +1,14 @@
-# ORCHESTRATOR_SPEC.md
+﻿# ORCHESTRATOR_SPEC.md
 
 ## Project Identity
 
-Gorechera는 Codex와 Claude를 포함한 provider-adapter 기반의 다중 에이전트 오케스트레이션 엔진이다.
+Gorchera는 Codex와 Claude를 포함한 provider-adapter 기반의 다중 에이전트 오케스트레이션 엔진이다.
 초기 구현은 Go MVP로 시작하며, CLI와 HTTP API를 함께 제공하는 운영 가능한 백엔드 코어를 목표로 한다.
 Windows Terminal은 필수 런타임이 아니라 선택적 관찰/디버그 뷰로만 취급한다.
 
 ## Platform Goal
 
-Gorechera의 목표 플랫폼은 Windows, macOS, Linux다.
+Gorchera의 목표 플랫폼은 Windows, macOS, Linux다.
 특정 운영체제의 터미널 UI, 프로세스 모델, 셸 문법에 코어 아키텍처가 종속되면 안 된다.
 
 원칙:
@@ -106,7 +106,7 @@ Codex CLI, Claude CLI 또는 이후 추가될 provider를 같은 인터페이스
 각 provider는 내부적으로 서로 다른 실행 방식을 가질 수 있으나 오케스트레이터는 공통 인터페이스만 사용해야 한다.
 
 ### Role-Based Execution Profiles
-Gorechera는 하나의 global provider/model 설정에 묶이지 않고, 역할별 execution profile을 선택하는 구조를 사용한다.
+Gorchera는 하나의 global provider/model 설정에 묶이지 않고, 역할별 execution profile을 선택하는 구조를 사용한다.
 
 역할 예시:
 - planner
@@ -963,14 +963,14 @@ MVP 단계에서는 다음을 아직 생략할 수 있다.
 
 ## Self-Hosting Roadmap
 
-Gorechera는 장기적으로 이 프로젝트 자체를 Gorechera 하네스로 개발할 수 있어야 한다.
+Gorchera는 장기적으로 이 프로젝트 자체를 Gorchera 하네스로 개발할 수 있어야 한다.
 
 단계 구분:
 - Phase 0: 수동 개발용 MVP
 - Phase 1: mock provider 기반 내부 루프 검증
 - Phase 2: 실제 provider adapter 연결
 - Phase 3: evaluator gate와 runtime harness 추가
-- Phase 4: 이 저장소 자체를 Gorechera가 보조적으로 수정하고 검증
+- Phase 4: 이 저장소 자체를 Gorchera가 보조적으로 수정하고 검증
 - Phase 5: 사람 감독 하의 self-hosting loop
 
 MVP 단계에서는 self-hosting이 완전하지 않아도 된다.

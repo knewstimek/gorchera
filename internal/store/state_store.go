@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 type StateStore struct {

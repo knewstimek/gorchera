@@ -1,4 +1,4 @@
-# Gorechera Coding Conventions
+# Gorchera Coding Conventions
 
 ## Build & Test
 
@@ -74,7 +74,7 @@ When adding a new leader action or worker status:
 - `artifacts.MaterializeTextArtifact(jobID, name, content)` -> path
 - `artifacts.MaterializeJSONArtifact(jobID, name, value)` -> path
 
-All files stored under `.gorechera/{jobID}/`.
+All files stored under `.gorchera/{jobID}/`.
 Filenames sanitized via sanitizeArtifactName() -- replaces special chars with `-`.
 Worker artifact files are named `step-{NN}-{sanitized_name}`.
 

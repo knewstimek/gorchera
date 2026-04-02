@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"gorechera/internal/api"
-	"gorechera/internal/domain"
-	"gorechera/internal/orchestrator"
-	"gorechera/internal/provider"
-	"gorechera/internal/provider/mock"
-	"gorechera/internal/store"
+	"gorchera/internal/api"
+	"gorchera/internal/domain"
+	"gorchera/internal/orchestrator"
+	"gorchera/internal/provider"
+	"gorchera/internal/provider/mock"
+	"gorchera/internal/store"
 )
 
 func TestServerExposesHealthAndJobs(t *testing.T) {

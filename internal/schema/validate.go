@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 var leaderActions = map[string]struct{}{

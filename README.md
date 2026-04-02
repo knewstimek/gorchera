@@ -10,7 +10,7 @@ Go stateful multi-agent orchestration engine with self-improvement capabilities.
 - **3 strictness levels**: strict (implement+review+test), normal (implement only), lenient (results only)
 - **3 context modes**: full, summary, minimal -- controls leader prompt payload size
 - **Job chaining**: sequential multi-goal execution with automatic advancement
-- **Supervisor steering**: mid-flight directive injection via `gorechera_steer`
+- **Supervisor steering**: mid-flight directive injection via `gorchera_steer`
 - **Provider adapters**: GPT/Codex, Claude, Mock -- with per-role model selection
 - **Self-improvement**: Gorchera can modify its own codebase via orchestrated jobs
 - **Error classification**: 12 error types with 3-strike retry policy
@@ -22,28 +22,28 @@ Go stateful multi-agent orchestration engine with self-improvement capabilities.
 
 ```bash
 go build ./...
-go run ./cmd/gorechera mcp          # Start MCP server for Claude Code integration
-go run ./cmd/gorechera run -goal "Add a hello function" -provider codex
-go run ./cmd/gorechera status -all
+go run ./cmd/gorchera mcp          # Start MCP server for Claude Code integration
+go run ./cmd/gorchera run -goal "Add a hello function" -provider codex
+go run ./cmd/gorchera status -all
 ```
 
 ## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `gorechera_start_job` | Start a single job |
-| `gorechera_start_chain` | Start sequential job chain |
-| `gorechera_status` | Get job status |
-| `gorechera_chain_status` | Get chain status |
-| `gorechera_steer` | Inject supervisor directive |
-| `gorechera_events` | Get job events |
-| `gorechera_artifacts` | Get job artifacts |
-| `gorechera_approve` | Approve blocked action |
-| `gorechera_reject` | Reject blocked action |
-| `gorechera_retry` | Retry failed job |
-| `gorechera_cancel` | Cancel running job |
-| `gorechera_resume` | Resume blocked job |
-| `gorechera_list_jobs` | List all jobs |
+| `gorchera_start_job` | Start a single job |
+| `gorchera_start_chain` | Start sequential job chain |
+| `gorchera_status` | Get job status |
+| `gorchera_chain_status` | Get chain status |
+| `gorchera_steer` | Inject supervisor directive |
+| `gorchera_events` | Get job events |
+| `gorchera_artifacts` | Get job artifacts |
+| `gorchera_approve` | Approve blocked action |
+| `gorchera_reject` | Reject blocked action |
+| `gorchera_retry` | Retry failed job |
+| `gorchera_cancel` | Cancel running job |
+| `gorchera_resume` | Resume blocked job |
+| `gorchera_list_jobs` | List all jobs |
 
 ## Architecture
 

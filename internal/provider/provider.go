@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 type Adapter interface {

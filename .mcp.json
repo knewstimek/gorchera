@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "gorechera": {
+    "gorchera": {
       "type": "stdio",
       "command": "go",
-      "args": ["run", "./cmd/gorechera", "mcp"]
+      "args": ["run", "./cmd/gorchera", "mcp"]
     }
   }
 }

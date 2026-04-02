@@ -1,8 +1,8 @@
 package api
 
 import (
-	"gorechera/internal/domain"
-	runtimeexec "gorechera/internal/runtime"
+	"gorchera/internal/domain"
+	runtimeexec "gorchera/internal/runtime"
 )
 
 type StartJobRequest struct {

@@ -1,4 +1,4 @@
-package provider
+﻿package provider
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gorechera/internal/domain"
-	"gorechera/internal/provider/mock"
-	"gorechera/internal/schema"
+	"gorchera/internal/domain"
+	"gorchera/internal/provider/mock"
+	"gorchera/internal/schema"
 )
 
 func TestNewRegistryRegistersBuiltInScaffolds(t *testing.T) {
@@ -32,7 +32,7 @@ func TestCodexAdapterDetectsMissingExecutable(t *testing.T) {
 	t.Parallel()
 
 	adapter := &CodexAdapter{
-		executable: "definitely-not-present-gorechera-codex",
+		executable: "definitely-not-present-gorchera-codex",
 		probeArgs:  []string{"--version"},
 		probeTime:  time.Second,
 	}

@@ -3,7 +3,7 @@ package policy_test
 import (
 	"testing"
 
-	"gorechera/internal/policy"
+	"gorchera/internal/policy"
 )
 
 func TestEvaluateAllowsSafeWorkspaceActions(t *testing.T) {

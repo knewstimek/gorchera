@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gorechera/internal/domain"
+	"gorchera/internal/domain"
 )
 
 func leaderSchema() string {
@@ -463,7 +463,7 @@ func writeSchemaFile(workspaceDir, name, schema string) (string, error) {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp(base, "gorechera-provider-*")
+	dir, err := os.MkdirTemp(base, "gorchera-provider-*")
 	if err != nil {
 		return "", err
 	}

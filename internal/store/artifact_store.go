@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gorechera/internal/domain"
-	runtimeexec "gorechera/internal/runtime"
+	"gorchera/internal/domain"
+	runtimeexec "gorchera/internal/runtime"
 )
 
 type ArtifactStore struct {
