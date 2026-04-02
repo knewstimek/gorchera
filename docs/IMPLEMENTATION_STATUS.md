@@ -1,6 +1,6 @@
 # Gorchera Implementation Status
 
-Last verified: 2026-04-02
+Last verified: 2026-04-03
 
 ## Build And Test
 
@@ -22,12 +22,13 @@ go test ./...    # PASS
   - `auto`: defers level selection to the planner phase; planner's `recommended_strictness` and `recommended_max_steps` are adopted before the sprint contract is built; falls back to `normal` if recommendation is absent or unrecognised
 - Evaluator rubric scoring: `VerificationContract.RubricAxes` defines per-axis thresholds (`name`, `weight`, `min_threshold`). The provider evaluator returns `RubricScores` (0.0-1.0 per axis). `mergeEvaluatorReport()` enforces thresholds additively -- rubric can only demote a passing report, never promote a failing one.
 - Planner prompt includes role profiles (provider/model per role) to inform `recommended_strictness` and `recommended_max_steps`; chain context section injected when `job.ChainContext` is present.
+- Jobs and chain goals now carry `ambition_level` (`low | medium | high`); omitted or unrecognized input defaults to `medium`.
 - Role-specific worker prompts are differentiated:
-  - executor: implementation-focused
+  - executor: implementation-focused with ambition-aware autonomy guidance (`low` = fix only, `medium` = allow directly related improvements, `high` = allow justified structural expansion)
   - reviewer: adversarial review focused on counterexamples, regressions, lifecycle/restart/retry/recovery/idempotency issues, and state-transition safety
   - audit: routed through the reviewer role with the same adversarial prompt family, but constrained to risk discovery and contract validation
   - tester: verification-focused with executable evidence preferred over narrative claims
-- Evaluator prompt is gate-oriented and no longer treats a single succeeded implement step as sufficient evidence by itself.
+- Evaluator prompt is gate-oriented, ambition-aware, and no longer treats a single succeeded implement step as sufficient evidence by itself.
 - Leader prompt includes a conditional high-risk review/audit trigger before completion for lifecycle/concurrency/deduplication/external-pricing/auth/UI-event-boundary changes.
 - Leader summarize throttling: after two consecutive summarize turns, the service forces completion evaluation instead of allowing endless summary churn.
 - Repeated blocked-reason protection: the same blocked reason three times in a row escalates to job failure.
@@ -114,7 +115,7 @@ go test ./...    # PASS
 ### Chain system
 
 - Persisted `JobChain` state with sequential goal execution.
-- Per-goal fields for provider, strictness level, context mode, max steps, job ID, and goal status.
+- Per-goal fields for provider, strictness level, ambition level, context mode, max steps, job ID, and goal status.
 - Automatic next-goal start after evaluator-approved completion of the current goal.
 - Chain result forwarding: completed job's `Summary` and `EvaluatorReportRef` are packaged as `ChainContext` and passed to the next goal's planner prompt.
 - Per-goal `role_overrides`: each `ChainGoal` supports `map[string]RoleProfile` overrides; MCP `gorchera_start_chain` exposes these as per-goal `role_overrides` objects.
@@ -163,6 +164,8 @@ go test ./...    # PASS
 - MCP server is implemented with:
   - job lifecycle tools
   - chain lifecycle tools
+  - `gorchera_start_job.ambition_level`
+  - `gorchera_start_chain` per-goal `ambition_level`
   - `gorchera_start_job.role_overrides`
   - `gorchera_start_chain` per-goal `role_overrides`
   - `wait=true` polling for job and chain status with configurable `wait_timeout` (default 30s, 0=5min maximum)

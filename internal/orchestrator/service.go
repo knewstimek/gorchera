@@ -53,6 +53,7 @@ type CreateJobInput struct {
 	RoleOverrides   map[string]domain.RoleProfile
 	MaxSteps        int
 	StrictnessLevel string // strict | normal | lenient; empty defaults to "normal"
+	AmbitionLevel   string // low | medium | high; empty or unrecognized defaults to "medium"
 	ContextMode     string // full | summary | minimal; empty defaults to "full"
 	ChainID         string
 	ChainGoalIndex  int
@@ -365,6 +366,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 			Goal:            strings.TrimSpace(goal.Goal),
 			Provider:        goal.Provider,
 			StrictnessLevel: normalizeStrictnessLevel(goal.StrictnessLevel),
+			AmbitionLevel:   domain.NormalizeAmbitionLevel(goal.AmbitionLevel),
 			ContextMode:     normalizeContextMode(goal.ContextMode),
 			MaxSteps:        goal.MaxSteps,
 			RoleOverrides:   goal.RoleOverrides,
@@ -415,6 +417,7 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		Constraints:           input.Constraints,
 		DoneCriteria:          input.DoneCriteria,
 		StrictnessLevel:       normalizeStrictnessLevel(input.StrictnessLevel),
+		AmbitionLevel:         domain.NormalizeAmbitionLevel(input.AmbitionLevel),
 		ContextMode:           normalizeContextMode(input.ContextMode),
 		RoleProfiles:          roleProfiles,
 		RoleOverrides:         input.RoleOverrides,
@@ -493,6 +496,7 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		WorkspaceDir:    workspaceDir,
 		MaxSteps:        goal.MaxSteps,
 		StrictnessLevel: goal.StrictnessLevel,
+		AmbitionLevel:   goal.AmbitionLevel,
 		ContextMode:     goal.ContextMode,
 		RoleProfiles:    domain.DefaultRoleProfiles(goal.Provider),
 		RoleOverrides:   goal.RoleOverrides,

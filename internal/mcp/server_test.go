@@ -63,9 +63,10 @@ func TestToolStartJobAcceptsExistingWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 
 	result, err := server.toolStartJob(context.Background(), map[string]any{
-		"goal":          "Accept valid MCP workspace",
-		"provider":      "quick-async",
-		"workspace_dir": workspace,
+		"goal":           "Accept valid MCP workspace",
+		"provider":       "quick-async",
+		"workspace_dir":  workspace,
+		"ambition_level": domain.AmbitionLevelHigh,
 	})
 	if err != nil {
 		t.Fatalf("toolStartJob returned error: %v", err)
@@ -77,6 +78,9 @@ func TestToolStartJobAcceptsExistingWorkspace(t *testing.T) {
 	}
 	if job.WorkspaceDir != workspace {
 		t.Fatalf("expected workspace dir %q, got %q", workspace, job.WorkspaceDir)
+	}
+	if job.AmbitionLevel != domain.AmbitionLevelHigh {
+		t.Fatalf("expected ambition level %q, got %q", domain.AmbitionLevelHigh, job.AmbitionLevel)
 	}
 
 	jobPath := filepath.Join(root, "state", "jobs", job.ID+".json")
@@ -114,6 +118,7 @@ func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 				"goal":             "hold first",
 				"provider":         string(control.name),
 				"strictness_level": "lenient",
+				"ambition_level":   domain.AmbitionLevelLow,
 				"context_mode":     "full",
 				"max_steps":        4,
 			},
@@ -154,12 +159,78 @@ func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	if chain.Goals[0].Status != "running" || chain.Goals[0].JobID == "" {
 		t.Fatalf("expected first goal running with job id, got %#v", chain.Goals[0])
 	}
+	if chain.Goals[0].AmbitionLevel != domain.AmbitionLevelLow {
+		t.Fatalf("expected first chain goal ambition level %q, got %q", domain.AmbitionLevelLow, chain.Goals[0].AmbitionLevel)
+	}
 	if chain.Goals[1].Status != "pending" || chain.Goals[1].JobID != "" {
 		t.Fatalf("expected second goal pending, got %#v", chain.Goals[1])
+	}
+	if chain.Goals[1].AmbitionLevel != domain.AmbitionLevelMedium {
+		t.Fatalf("expected second chain goal default ambition level %q, got %q", domain.AmbitionLevelMedium, chain.Goals[1].AmbitionLevel)
+	}
+
+	jobResult, err := server.toolStatus(context.Background(), map[string]any{"job_id": chain.Goals[0].JobID})
+	if err != nil {
+		t.Fatalf("toolStatus returned error: %v", err)
+	}
+	var job domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, jobResult)), &job); err != nil {
+		t.Fatalf("failed to decode job status: %v", err)
+	}
+	if job.AmbitionLevel != domain.AmbitionLevelLow {
+		t.Fatalf("expected first chained job ambition level %q, got %q", domain.AmbitionLevelLow, job.AmbitionLevel)
 	}
 
 	close(control.release)
 	waitForChainStatus(t, service, started.ChainID, "done")
+}
+
+func TestStartToolSchemasExposeAmbitionLevel(t *testing.T) {
+	t.Parallel()
+
+	tools := toolList()
+	var foundJob bool
+	var foundChain bool
+
+	for _, tool := range tools {
+		switch tool.Name {
+		case "gorchera_start_job":
+			foundJob = true
+			prop, ok := tool.InputSchema.Properties["ambition_level"]
+			if !ok {
+				t.Fatal("gorchera_start_job schema missing ambition_level")
+			}
+			if prop.Type != "string" {
+				t.Fatalf("gorchera_start_job ambition_level type = %q, want string", prop.Type)
+			}
+			if prop.Default != domain.AmbitionLevelMedium {
+				t.Fatalf("gorchera_start_job ambition_level default = %#v, want %q", prop.Default, domain.AmbitionLevelMedium)
+			}
+		case "gorchera_start_chain":
+			foundChain = true
+			goalsProp, ok := tool.InputSchema.Properties["goals"]
+			if !ok || goalsProp.Items == nil {
+				t.Fatal("gorchera_start_chain schema missing goals items")
+			}
+			prop, ok := goalsProp.Items.Properties["ambition_level"]
+			if !ok {
+				t.Fatal("gorchera_start_chain goal schema missing ambition_level")
+			}
+			if prop.Type != "string" {
+				t.Fatalf("gorchera_start_chain ambition_level type = %q, want string", prop.Type)
+			}
+			if prop.Default != domain.AmbitionLevelMedium {
+				t.Fatalf("gorchera_start_chain ambition_level default = %#v, want %q", prop.Default, domain.AmbitionLevelMedium)
+			}
+		}
+	}
+
+	if !foundJob {
+		t.Fatal("gorchera_start_job schema not found")
+	}
+	if !foundChain {
+		t.Fatal("gorchera_start_chain schema not found")
+	}
 }
 
 func TestStatusToolsExposeWaitSchema(t *testing.T) {

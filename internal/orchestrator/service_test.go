@@ -113,6 +113,69 @@ func TestServiceStartHandlesPlannerOutputWithoutInvariants(t *testing.T) {
 	}
 }
 
+func TestServiceStartNormalizesAmbitionLevel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty defaults to medium", input: "", want: domain.AmbitionLevelMedium},
+		{name: "low preserved", input: domain.AmbitionLevelLow, want: domain.AmbitionLevelLow},
+		{name: "medium preserved", input: domain.AmbitionLevelMedium, want: domain.AmbitionLevelMedium},
+		{name: "high preserved", input: domain.AmbitionLevelHigh, want: domain.AmbitionLevelHigh},
+		{name: "unknown defaults to medium", input: "sideways", want: domain.AmbitionLevelMedium},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			workspace := t.TempDir()
+			registry := provider.NewRegistry()
+			adapter := newGatedLeaderProvider(domain.ProviderName("ambition-" + strings.ReplaceAll(tc.name, " ", "-")))
+			registry.Register(adapter)
+
+			service := orchestrator.NewService(
+				provider.NewSessionManager(registry),
+				store.NewStateStore(filepath.Join(root, "state")),
+				store.NewArtifactStore(filepath.Join(root, "artifacts")),
+				root,
+			)
+			t.Cleanup(service.Shutdown)
+
+			job, err := service.StartAsync(context.Background(), orchestrator.CreateJobInput{
+				Goal:          "Normalize ambition level",
+				Provider:      adapter.name,
+				WorkspaceDir:  workspace,
+				AmbitionLevel: tc.input,
+			})
+			if err != nil {
+				t.Fatalf("StartAsync returned error: %v", err)
+			}
+			if job.AmbitionLevel != tc.want {
+				t.Fatalf("returned job ambition level = %q, want %q", job.AmbitionLevel, tc.want)
+			}
+
+			waitForLeaderStart(t, adapter.started, "wait for ambition normalization job to enter leader phase")
+
+			stored, err := service.Get(context.Background(), job.ID)
+			if err != nil {
+				t.Fatalf("Get returned error: %v", err)
+			}
+			if stored.AmbitionLevel != tc.want {
+				t.Fatalf("stored job ambition level = %q, want %q", stored.AmbitionLevel, tc.want)
+			}
+
+			close(adapter.release)
+			waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
+		})
+	}
+}
+
 func TestServiceStartRejectsInvalidWorkspaceBeforePersistence(t *testing.T) {
 	t.Parallel()
 
@@ -480,6 +543,65 @@ func TestServiceStartChainStartsFirstGoalAndAdvancesSequentially(t *testing.T) {
 	}
 	if done.Goals[1].Status != "done" || done.Goals[1].JobID == "" {
 		t.Fatalf("expected second goal done with job id, got %#v", done.Goals[1])
+	}
+}
+
+func TestServiceStartChainPropagatesAmbitionLevelToJobs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	workspace := t.TempDir()
+	registry := provider.NewRegistry()
+	control := &chainOutcomeProvider{
+		name:    domain.ProviderName("chain-ambition"),
+		release: make(chan struct{}),
+	}
+	registry.Register(control)
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+	t.Cleanup(service.Shutdown)
+
+	chain, err := service.StartChain(context.Background(), []domain.ChainGoal{
+		{Goal: "finish first", Provider: control.name, AmbitionLevel: domain.AmbitionLevelHigh, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+		{Goal: "hold second", Provider: control.name, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+	}, workspace)
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		latest, getErr := service.GetChain(context.Background(), chain.ID)
+		if getErr == nil && latest.CurrentIndex == 1 && latest.Goals[1].Status == domain.ChainGoalStatusRunning && latest.Goals[0].JobID != "" && latest.Goals[1].JobID != "" {
+			firstJob, err := service.Get(context.Background(), latest.Goals[0].JobID)
+			if err != nil {
+				t.Fatalf("Get first job returned error: %v", err)
+			}
+			if firstJob.AmbitionLevel != domain.AmbitionLevelHigh {
+				t.Fatalf("first chained job ambition level = %q, want %q", firstJob.AmbitionLevel, domain.AmbitionLevelHigh)
+			}
+
+			secondJob, err := service.Get(context.Background(), latest.Goals[1].JobID)
+			if err != nil {
+				t.Fatalf("Get second job returned error: %v", err)
+			}
+			if secondJob.AmbitionLevel != domain.AmbitionLevelMedium {
+				t.Fatalf("second chained job ambition level = %q, want %q", secondJob.AmbitionLevel, domain.AmbitionLevelMedium)
+			}
+
+			close(control.release)
+			waitForChainStatus(t, service, chain.ID, "done")
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for chained jobs to expose propagated ambition levels")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -1231,6 +1231,117 @@ func TestPlannerSchemaUsesStrictRequiredProperties(t *testing.T) {
 	}
 }
 
+func TestPlannerPromptIsUnchangedByAmbitionLevel(t *testing.T) {
+	t.Parallel()
+
+	base := domain.Job{
+		Goal:        "Keep planner prompt stable",
+		Provider:    domain.ProviderMock,
+		Constraints: []string{"Do not change planner guidance"},
+	}
+
+	defaultPrompt := buildPlannerPrompt(base)
+	highPrompt := buildPlannerPrompt(domain.Job{
+		Goal:          base.Goal,
+		Provider:      base.Provider,
+		Constraints:   append([]string(nil), base.Constraints...),
+		AmbitionLevel: domain.AmbitionLevelHigh,
+	})
+	if defaultPrompt != highPrompt {
+		t.Fatal("expected planner prompt to remain unchanged by ambition level")
+	}
+}
+
+func TestExecutorPromptIncludesAmbitionGuidance(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		level string
+		want  string
+	}{
+		{
+			name:  "low",
+			level: domain.AmbitionLevelLow,
+			want:  "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task.",
+		},
+		{
+			name:  "medium",
+			level: domain.AmbitionLevelMedium,
+			want:  "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope.",
+		},
+		{
+			name:  "high",
+			level: domain.AmbitionLevelHigh,
+			want:  "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			prompt := buildWorkerPrompt(domain.Job{
+				Goal:          "Tune executor autonomy",
+				Provider:      domain.ProviderMock,
+				AmbitionLevel: tc.level,
+			}, domain.LeaderOutput{
+				Action:   "run_worker",
+				Target:   "B",
+				TaskType: "implement",
+				TaskText: "Implement the requested change only",
+			})
+
+			if !strings.Contains(prompt, "Autonomy guidance:\n"+tc.want) {
+				t.Fatalf("expected executor prompt to include exact ambition guidance %q", tc.want)
+			}
+		})
+	}
+}
+
+func TestEvaluatorPromptIncludesAmbitionGuidance(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		level string
+		want  string
+	}{
+		{
+			name:  "low",
+			level: domain.AmbitionLevelLow,
+			want:  "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion.",
+		},
+		{
+			name:  "medium",
+			level: domain.AmbitionLevelMedium,
+			want:  "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope.",
+		},
+		{
+			name:  "high",
+			level: domain.AmbitionLevelHigh,
+			want:  "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			prompt := buildEvaluatorPrompt(domain.Job{
+				Goal:          "Evaluate ambition-aware scope",
+				Provider:      domain.ProviderMock,
+				AmbitionLevel: tc.level,
+			})
+			if !strings.Contains(prompt, tc.want) {
+				t.Fatalf("expected evaluator prompt to include ambition guidance %q", tc.want)
+			}
+		})
+	}
+}
+
 func TestReviewerPromptUsesAdversarialGuidance(t *testing.T) {
 	t.Parallel()
 
@@ -1259,6 +1370,42 @@ func TestReviewerPromptUsesAdversarialGuidance(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Invariants to preserve:\n- Do not break retry idempotency") {
 		t.Fatal("expected reviewer prompt to render invariants")
+	}
+}
+
+func TestReviewerAndTesterPromptsKeepRoleSpecificBehaviorWithAmbition(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		Goal:          "Keep non-executor prompt branches stable",
+		Provider:      domain.ProviderMock,
+		AmbitionLevel: domain.AmbitionLevelHigh,
+	}
+
+	reviewerPrompt := buildWorkerPrompt(job, domain.LeaderOutput{
+		Action:   "run_worker",
+		Target:   "C",
+		TaskType: "review",
+		TaskText: "Review the implementation for regressions",
+	})
+	if !strings.Contains(reviewerPrompt, "You are a reviewer component") {
+		t.Fatal("expected reviewer branch to remain active")
+	}
+	if strings.Contains(reviewerPrompt, "Autonomy guidance:") {
+		t.Fatal("reviewer prompt should not include executor ambition guidance")
+	}
+
+	testerPrompt := buildWorkerPrompt(job, domain.LeaderOutput{
+		Action:   "run_worker",
+		Target:   "D",
+		TaskType: "test",
+		TaskText: "Run the verification checks",
+	})
+	if !strings.Contains(testerPrompt, "You are a tester component") {
+		t.Fatal("expected tester branch to remain active")
+	}
+	if strings.Contains(testerPrompt, "Autonomy guidance:") {
+		t.Fatal("tester prompt should not include executor ambition guidance")
 	}
 }
 

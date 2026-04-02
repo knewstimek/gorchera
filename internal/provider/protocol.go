@@ -167,7 +167,9 @@ func workerSchema() string {
 }
 
 func buildPlannerPrompt(job domain.Job) string {
-	payload, _ := json.MarshalIndent(job, "", "  ")
+	plannerJob := job
+	plannerJob.AmbitionLevel = ""
+	payload, _ := json.MarshalIndent(plannerJob, "", "  ")
 	chainSection := ""
 	if job.ChainContext != nil && (job.ChainContext.Summary != "" || job.ChainContext.EvaluatorReportRef != "") {
 		chainSection = fmt.Sprintf("\n\n## Previous chain step results\n\nSummary: %s\nEvaluator report: %s\n",
@@ -245,6 +247,28 @@ Output requirements (all fields required in JSON):
 `, job.Goal, string(payload), chainSection, roleProfilesSection.String()))
 }
 
+func ambitionInstruction(level string) string {
+	switch domain.NormalizeAmbitionLevel(level) {
+	case domain.AmbitionLevelLow:
+		return "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task."
+	case domain.AmbitionLevelHigh:
+		return "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified."
+	default:
+		return "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope."
+	}
+}
+
+func ambitionEvaluationGuidance(level string) string {
+	switch domain.NormalizeAmbitionLevel(level) {
+	case domain.AmbitionLevelLow:
+		return "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion."
+	case domain.AmbitionLevelHigh:
+		return "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task."
+	default:
+		return "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope."
+	}
+}
+
 func buildEvaluatorPrompt(job domain.Job) string {
 	payload, _ := json.MarshalIndent(job, "", "  ")
 	contractPayload := "{}"
@@ -276,6 +300,7 @@ EVALUATION ROLE:
 - You are a release gate, not a cheerleader.
 - Do NOT pass the job merely because one implement step succeeded.
 - Base your decision on acceptance criteria, verification contract evidence, step outcomes, and whether the goal is actually satisfied.
+- %s
 
 Job goal: %s
 
@@ -293,7 +318,7 @@ Current job state:
 
 Verification contract:
 %s
-`, job.Goal, rubricSection, string(payload), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, string(payload), contractPayload))
 }
 
 func buildLeaderPrompt(job domain.Job) string {
@@ -748,6 +773,9 @@ Invariants to preserve:
 Scope boundary:
 %s
 
+Autonomy guidance:
+%s
+
 Assigned task payload:
 %s
 
@@ -763,7 +791,7 @@ Job state:
 
 Verification contract:
 %s
-`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, string(taskPayload), string(jobPayload), contractPayload))
+`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), string(jobPayload), contractPayload))
 }
 
 func profilePrompt(role domain.RoleName, job domain.Job) string {

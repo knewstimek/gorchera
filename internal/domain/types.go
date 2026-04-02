@@ -56,6 +56,12 @@ const (
 	RoleEvaluator RoleName = "evaluator"
 )
 
+const (
+	AmbitionLevelLow    = "low"
+	AmbitionLevelMedium = "medium"
+	AmbitionLevelHigh   = "high"
+)
+
 type ExecutionProfile struct {
 	Provider         ProviderName `json:"provider"`
 	Model            string       `json:"model,omitempty"`
@@ -143,6 +149,17 @@ func RoleForTaskType(taskType string) RoleName {
 	}
 }
 
+func NormalizeAmbitionLevel(level string) string {
+	switch strings.TrimSpace(strings.ToLower(level)) {
+	case AmbitionLevelLow:
+		return AmbitionLevelLow
+	case AmbitionLevelHigh:
+		return AmbitionLevelHigh
+	default:
+		return AmbitionLevelMedium
+	}
+}
+
 type SystemActionType string
 
 const (
@@ -222,6 +239,7 @@ type ChainGoal struct {
 	Goal            string                 `json:"goal"`
 	Provider        ProviderName           `json:"provider"`
 	StrictnessLevel string                 `json:"strictness_level,omitempty"`
+	AmbitionLevel   string                 `json:"ambition_level,omitempty"`
 	ContextMode     string                 `json:"context_mode,omitempty"`
 	MaxSteps        int                    `json:"max_steps"`
 	RoleOverrides   map[string]RoleProfile `json:"role_overrides,omitempty"`
@@ -392,6 +410,7 @@ type Job struct {
 	Constraints             []string               `json:"constraints,omitempty"`
 	DoneCriteria            []string               `json:"done_criteria,omitempty"`
 	StrictnessLevel         string                 `json:"strictness_level,omitempty"` // strict | normal | lenient
+	AmbitionLevel           string                 `json:"ambition_level,omitempty"`   // low | medium | high
 	ContextMode             string                 `json:"context_mode,omitempty"`     // full | summary | minimal
 	RoleProfiles            RoleProfiles           `json:"role_profiles"`
 	RoleOverrides           map[string]RoleProfile `json:"role_overrides,omitempty"`

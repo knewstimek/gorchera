@@ -110,6 +110,7 @@ Start path:
 - `StartChain()` validates the shared workspace directory.
 - Each incoming `ChainGoal` is normalized:
   - `strictness_level`: `strict | normal | lenient`
+  - `ambition_level`: `low | medium | high` (defaults to `medium`)
   - `context_mode`: `full | summary | minimal`
   - `max_steps`: defaults to 8
   - `provider`: defaults to `mock`
@@ -160,6 +161,19 @@ Normalization:
 - Empty or unrecognized values are normalized to `full`
 - `auto` is passed through so the payload builder can resolve it at runtime
 - Chain goals carry their own `context_mode`, which is copied into the job created for that goal
+
+## Ambition Levels
+
+Worker autonomy is shaped by `job.AmbitionLevel`:
+
+- `low`: executor must stay mechanical and avoid refactors or scope expansion
+- `medium`: executor may include directly related fixes such as obvious error handling or edge cases
+- `high`: executor may make justified structural improvements and flag adjacent risks
+
+Normalization:
+- Empty or unrecognized values are normalized to `medium`
+- Chain goals carry their own `ambition_level`, which is copied into the job created for that goal
+- Planner prompts are unchanged by this field; only executor and evaluator prompts use it
 
 ## Auto Context Mode
 
@@ -337,7 +351,8 @@ MCP (17 tools):
 - chain tools: `gorchera_start_chain`, `gorchera_chain_status`, `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, `gorchera_skip_chain_goal`
 - steer tool: `gorchera_steer`
 - `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `workspace_mode`, `max_steps`, `strictness_level`, `context_mode` (supports `auto`)
-- `gorchera_start_chain` key parameters: `workspace_dir`, `goals[]` with per-goal `goal`, `provider`, `strictness_level`, `context_mode`, `max_steps`, `role_overrides`
+- `gorchera_start_job` also accepts `ambition_level` (`low | medium | high`, default `medium`)
+- `gorchera_start_chain` key parameters: `workspace_dir`, `goals[]` with per-goal `goal`, `provider`, `strictness_level`, `ambition_level`, `context_mode`, `max_steps`, `role_overrides`
 - `wait=true` is supported on `gorchera_status` and `gorchera_chain_status` with 2-second polling
 - Omitted `wait_timeout` defaults to 30 seconds; `wait_timeout=0` preserves the 5-minute maximum
 - Positive `wait_timeout` values are interpreted as seconds
@@ -361,10 +376,11 @@ Enforcement in `mergeEvaluatorReport()` (evaluator.go):
 Evaluator prompt:
 - When rubric axes are present in the verification contract, the evaluator prompt includes a `RUBRIC SCORING` section.
 - The evaluator prompt is gate-oriented: it must assess acceptance criteria, verification evidence, and unresolved contradictions in job steps rather than passing solely because one implementation step succeeded.
+- The evaluator prompt is ambition-aware: low ambition stays scoped to the explicit request, medium allows directly related improvements, and high accepts justified scope expansion while preserving the evaluator gate.
 - The evaluator must score each axis on a 0.0-1.0 scale with one-sentence reasoning per axis.
 
 Worker prompt roles:
-- Executor prompts remain implementation-focused.
+- Executor prompts remain implementation-focused and add ambition-specific autonomy guidance.
 - Reviewer prompts are adversarial: they search for counterexamples, contract violations, regressions, lifecycle/retry/recovery/idempotency issues, and state-transition problems.
 - `task_type="audit"` routes to the reviewer role and uses the same adversarial prompt family, but instructs the worker to stay focused on risk discovery and contract validation rather than unrelated implementation.
 

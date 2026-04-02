@@ -216,6 +216,7 @@ func toolList() []toolDef {
 					"workspace_mode":   {Type: "string", Description: "Workspace mode: shared | isolated. isolated creates a detached git worktree rooted at HEAD for the job.", Default: "shared"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
+					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
 				},
 				Required: []string{"goal"},
@@ -237,6 +238,7 @@ func toolList() []toolDef {
 								"goal":             {Type: "string", Description: "Natural-language goal for this chain step"},
 								"provider":         {Type: "string", Description: "Provider name: mock | codex | claude"},
 								"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
+								"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto (auto selects based on step count)", Default: "full"},
 								"max_steps":        {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
 								"role_overrides": {
@@ -515,6 +517,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	workspaceMode := stringArgDefault(args, "workspace_mode", string(domain.WorkspaceModeShared))
 	maxSteps := intArgDefault(args, "max_steps", 8)
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
+	ambitionLevel := stringArgDefault(args, "ambition_level", domain.AmbitionLevelMedium)
 	contextMode := stringArgDefault(args, "context_mode", "full")
 	if err := orchestrator.ValidateWorkspaceDir(workspaceDir); err != nil {
 		return toolResult{}, err
@@ -527,6 +530,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		WorkspaceMode:   workspaceMode,
 		MaxSteps:        maxSteps,
 		StrictnessLevel: strictnessLevel,
+		AmbitionLevel:   ambitionLevel,
 		ContextMode:     contextMode,
 		RoleProfiles:    domain.DefaultRoleProfiles(provider),
 	}
@@ -565,6 +569,7 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 			Goal:            stringArg(goalMap, "goal"),
 			Provider:        domain.ProviderName(stringArg(goalMap, "provider")),
 			StrictnessLevel: stringArgDefault(goalMap, "strictness_level", "normal"),
+			AmbitionLevel:   stringArgDefault(goalMap, "ambition_level", domain.AmbitionLevelMedium),
 			ContextMode:     stringArgDefault(goalMap, "context_mode", "full"),
 			MaxSteps:        intArgDefault(goalMap, "max_steps", 8),
 		}
