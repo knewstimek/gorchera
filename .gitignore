@@ -4,6 +4,7 @@ AGENTS.md
 OVERVIEW.md
 .env
 .gorechera/
+.gorchera/
 *.exe
 *.exe~
 *.obj
