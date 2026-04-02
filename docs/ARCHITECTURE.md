@@ -53,6 +53,11 @@ Job:  starting -> running -> waiting_leader -> (action) ->
 
 Step: pending -> active -> succeeded / blocked / failed / skipped
 
+Successful worker steps may also carry `DiffSummary`, populated from
+`git diff --stat` in the workspace when the workspace is a git repository and
+the `git` CLI is available. If git is unavailable or the workspace is not a
+repository, the field stays empty and the step still succeeds normally.
+
 ChainGoal: pending -> running -> done / failed
 
 JobChain: running -> done / failed

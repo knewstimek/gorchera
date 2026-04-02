@@ -67,7 +67,7 @@ All known bugs have been fixed (2026-04-02, TOCTOU fixed separately).
 - Rough token/cost tracking on job + step state using serialized input/output heuristics (1 token / 4 chars, non-billing estimate)
 - Normal strictness evaluator gate: `implement` required, `review` optional, rule-based override for provider blocked
 - Claude adapter real integration (planner/leader/worker confirmed, --permission-mode dontAsk, --json-schema, stdin prompt)
-- Codex adapter real integration (GPT full pipeline done convergence achieved, stdin prompt, workspace-write sandbox)
+- Codex adapter real integration (GPT full pipeline done convergence achieved, stdin prompt, workspace-write sandbox, per-role GPT model selection with Claude-shorthand suppression)
 - MCP server (JSON-RPC 2.0 stdio, 12 tools, notification support)
 - Sequential job chaining with persisted `JobChain` state, automatic next-goal start on successful completion, and terminal failure propagation on blocked/failed chained jobs
 - Evaluator strictness 3 levels (strict/normal/lenient) with per-level verification rules
@@ -82,7 +82,7 @@ All known bugs have been fixed (2026-04-02, TOCTOU fixed separately).
 | Item | Spec ref | Current state |
 |------|----------|---------------|
 | Claude adapter (real) | spec:102-106 | **Done.** Real integration with --permission-mode dontAsk, --json-schema, --output-format json, stdin prompt, per-role model selection. |
-| Codex adapter (real) | spec:102-106 | **Done.** Real integration with codex exec, --output-schema, workspace-write sandbox, stdin prompt. Full pipeline done convergence confirmed. |
+| Codex adapter (real) | spec:102-106 | **Done.** Real integration with codex exec, --output-schema, workspace-write sandbox, stdin prompt, and per-role GPT model selection that suppresses Claude shorthand values. Full pipeline done convergence confirmed. |
 | Error classification (10 types) | spec:419-432 | Only 5 types: missing_executable, probe_failed, command_failed, invalid_response, unsupported_phase. Missing: auth, quota, rate_limit, billing, session_expired, network, transport. |
 | Error-specific retry/block policy | spec:433-478 | None. All errors result in simple fail. |
 

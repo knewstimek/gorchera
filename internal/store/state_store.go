@@ -154,5 +154,20 @@ func writeAtomically(path string, data []byte) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp)
+
+	if err := os.Rename(tmp, path); err == nil {
+		return nil
+	} else {
+
+		// Windows does not replace an existing destination with os.Rename.
+		// Fall back to remove-then-rename when the target already exists.
+		if _, statErr := os.Stat(path); statErr != nil {
+			return err
+		}
+		if removeErr := os.Remove(path); removeErr != nil {
+			return removeErr
+		}
+		return os.Rename(tmp, path)
+	}
 }

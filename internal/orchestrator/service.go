@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -871,6 +873,7 @@ func (s *Service) runWorkerStep(ctx context.Context, job *domain.Job, leader dom
 
 	switch worker.Status {
 	case "success":
+		last.DiffSummary = collectWorkspaceDiffSummary(ctx, firstNonEmpty(job.WorkspaceDir, s.workspaceRoot))
 		last.Status = domain.StepStatusSucceeded
 		job.Status = domain.JobStatusRunning
 		s.addEvent(job, "worker_succeeded", worker.Summary)
@@ -1480,4 +1483,20 @@ func summarizeSystemResult(result runtimeexec.Result) string {
 		return "system action produced no runtime result"
 	}
 	return fmt.Sprintf("%s %s exited with code %d", result.Category, result.Command, result.ExitCode)
+}
+
+func collectWorkspaceDiffSummary(ctx context.Context, workspaceDir string) string {
+	workspaceDir = strings.TrimSpace(workspaceDir)
+	if workspaceDir == "" {
+		return ""
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", workspaceDir, "diff", "--stat")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(stdout.String())
 }

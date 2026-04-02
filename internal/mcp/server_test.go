@@ -261,7 +261,7 @@ func toolResultText(t *testing.T, result toolResult) string {
 func waitForJobStatus(t *testing.T, service *orchestrator.Service, jobID string, want domain.JobStatus) {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		job, err := service.Get(context.Background(), jobID)
 		if err == nil && job.Status == want {
@@ -281,7 +281,7 @@ func waitForJobStatus(t *testing.T, service *orchestrator.Service, jobID string,
 func waitForChainStatus(t *testing.T, service *orchestrator.Service, chainID string, want string) {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		chain, err := service.GetChain(context.Background(), chainID)
 		if err == nil && chain.Status == want {

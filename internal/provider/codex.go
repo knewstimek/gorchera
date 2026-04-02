@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gorechera/internal/domain"
@@ -36,28 +37,28 @@ func (a *CodexAdapter) RunLeader(ctx context.Context, job domain.Job) (string, e
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildLeaderPrompt(job), leaderSchema())
+	return a.runStructured(ctx, job.WorkspaceDir, buildLeaderPrompt(job), leaderSchema(), job.RoleProfiles.ProfileFor(domain.RoleLeader, job.Provider).Model)
 }
 
 func (a *CodexAdapter) RunPlanner(ctx context.Context, job domain.Job) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildPlannerPrompt(job), plannerSchema())
+	return a.runStructured(ctx, job.WorkspaceDir, buildPlannerPrompt(job), plannerSchema(), job.RoleProfiles.ProfileFor(domain.RolePlanner, job.Provider).Model)
 }
 
 func (a *CodexAdapter) RunEvaluator(ctx context.Context, job domain.Job) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildEvaluatorPrompt(job), evaluatorSchema())
+	return a.runStructured(ctx, job.WorkspaceDir, buildEvaluatorPrompt(job), evaluatorSchema(), job.RoleProfiles.ProfileFor(domain.RoleEvaluator, job.Provider).Model)
 }
 
 func (a *CodexAdapter) RunWorker(ctx context.Context, job domain.Job, task domain.LeaderOutput) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildWorkerPrompt(job, task), workerSchema())
+	return a.runStructured(ctx, job.WorkspaceDir, buildWorkerPrompt(job, task), workerSchema(), job.RoleProfiles.ProfileFor(domain.RoleForTaskType(task.TaskType), job.Provider).Model)
 }
 
 func (a *CodexAdapter) ensureReady(ctx context.Context) error {
@@ -74,7 +75,7 @@ func (a *CodexAdapter) ensureReady(ctx context.Context) error {
 	return nil
 }
 
-func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, schema string) (string, error) {
+func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, schema, model string) (string, error) {
 	schemaPath, err := writeSchemaFile(workspaceDir, "schema.json", schema)
 	if err != nil {
 		return "", invalidResponseError(a.Name(), a.executable, "failed to write schema file", err)
@@ -102,6 +103,9 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 		"-C", firstNonEmpty(workspaceDir, "."),
 		"-", // read prompt from stdin
 	}
+	if model = strings.TrimSpace(model); model != "" && isCodexModel(model) {
+		args = append(args, "--model", model)
+	}
 	if executable := a.executable; executable != "" {
 		result, err := a.runCommand(ctx, executable, a.runTime, workspaceDir, nil, prompt, args...)
 		if err != nil {
@@ -121,4 +125,17 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func isCodexModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return true
+	}
+	switch normalized {
+	case "opus", "sonnet", "haiku":
+		return false
+	default:
+		return strings.HasPrefix(normalized, "gpt")
+	}
 }

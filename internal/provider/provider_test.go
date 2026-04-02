@@ -210,6 +210,169 @@ func TestCodexAdapterRunPlannerUsesPlannerProfile(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterAddsModelFlagForGPTRoleProfiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		job    func(string) domain.Job
+		invoke func(*CodexAdapter, domain.Job) (string, error)
+	}{
+		{
+			name: "leader",
+			job: func(root string) domain.Job {
+				return domain.Job{
+					Goal:         "Leader uses codex model",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunLeader(context.Background(), job)
+			},
+		},
+		{
+			name: "planner",
+			job: func(root string) domain.Job {
+				return domain.Job{
+					Goal:         "Planner uses codex model",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Planner: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunPlanner(context.Background(), job)
+			},
+		},
+		{
+			name: "evaluator",
+			job: func(root string) domain.Job {
+				return domain.Job{
+					Goal:         "Evaluator uses codex model",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Evaluator: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunEvaluator(context.Background(), job)
+			},
+		},
+		{
+			name: "worker",
+			job: func(root string) domain.Job {
+				return domain.Job{
+					Goal:         "Worker uses codex model",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Executor: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunWorker(context.Background(), job, domain.LeaderOutput{
+					Action:   "run_worker",
+					Target:   "B",
+					TaskType: "implement",
+					TaskText: "execute work",
+				})
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			var capturedArgs []string
+			adapter := newTestCodexAdapter(t, func(_ string, args []string) {
+				capturedArgs = append([]string(nil), args...)
+			})
+
+			out, err := tc.invoke(adapter, tc.job(root))
+			if err != nil {
+				t.Fatalf("expected %s run to succeed, got error: %v", tc.name, err)
+			}
+			if out == "" {
+				t.Fatalf("expected %s output", tc.name)
+			}
+			assertCodexModelFlag(t, capturedArgs, "gpt-5.4")
+		})
+	}
+}
+
+func TestCodexAdapterSuppressesModelFlagForClaudeShorthandAndEmptyModels(t *testing.T) {
+	t.Parallel()
+
+	for _, model := range []string{"", "opus", "sonnet", "haiku"} {
+		model := model
+		t.Run(modelOrEmpty(model), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			var capturedArgs []string
+			adapter := newTestCodexAdapter(t, func(_ string, args []string) {
+				capturedArgs = append([]string(nil), args...)
+			})
+
+			out, err := adapter.RunLeader(context.Background(), domain.Job{
+				Goal:         "Suppress codex model flag",
+				WorkspaceDir: root,
+				Provider:     domain.ProviderCodex,
+				RoleProfiles: domain.RoleProfiles{
+					Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: model},
+				},
+			})
+			if err != nil {
+				t.Fatalf("expected leader run to succeed, got error: %v", err)
+			}
+			if out == "" {
+				t.Fatal("expected leader output")
+			}
+			assertCodexModelFlagAbsent(t, capturedArgs)
+		})
+	}
+}
+
+func TestIsCodexModel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{model: "", want: true},
+		{model: "gpt-5.4", want: true},
+		{model: "GPT-5.4-mini", want: true},
+		{model: "opus", want: false},
+		{model: "sonnet", want: false},
+		{model: "haiku", want: false},
+		{model: "claude-3-7-sonnet", want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(modelOrEmpty(tc.model), func(t *testing.T) {
+			t.Parallel()
+
+			if got := isCodexModel(tc.model); got != tc.want {
+				t.Fatalf("isCodexModel(%q) = %t, want %t", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestClaudeAdapterRunEvaluatorUsesEvaluatorProfile(t *testing.T) {
 	t.Parallel()
 
@@ -518,4 +681,69 @@ func (a fallbackLeaderAdapter) RunLeader(_ context.Context, _ domain.Job) (strin
 
 func (a fallbackLeaderAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
 	return `{"status":"success","summary":"fallback worker"}`, nil
+}
+
+func newTestCodexAdapter(t *testing.T, capture func(string, []string)) *CodexAdapter {
+	t.Helper()
+
+	return &CodexAdapter{
+		executable: "go",
+		probeArgs:  []string{"version"},
+		probeTime:  2 * time.Second,
+		runTime:    2 * time.Second,
+		runCommand: func(_ context.Context, _ string, _ time.Duration, _ string, _ []string, _ string, args ...string) (CommandResult, error) {
+			t.Helper()
+			outputPath := ""
+			for i := 0; i < len(args)-1; i++ {
+				if args[i] == "-o" {
+					outputPath = args[i+1]
+					break
+				}
+			}
+			if outputPath == "" {
+				return CommandResult{}, errors.New("missing output path")
+			}
+			if capture != nil {
+				capture(outputPath, args)
+			}
+			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+				return CommandResult{}, err
+			}
+			if err := os.WriteFile(outputPath, []byte(`{"status":"success","summary":"ok"}`), 0o644); err != nil {
+				return CommandResult{}, err
+			}
+			return CommandResult{}, nil
+		},
+	}
+}
+
+func assertCodexModelFlag(t *testing.T, args []string, want string) {
+	t.Helper()
+
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--model" {
+			if args[i+1] != want {
+				t.Fatalf("expected --model %q, got %q in args %v", want, args[i+1], args)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected --model %q in args %v", want, args)
+}
+
+func assertCodexModelFlagAbsent(t *testing.T, args []string) {
+	t.Helper()
+
+	for _, arg := range args {
+		if arg == "--model" {
+			t.Fatalf("expected --model to be absent from args %v", args)
+		}
+	}
+}
+
+func modelOrEmpty(model string) string {
+	if model == "" {
+		return "empty"
+	}
+	return model
 }

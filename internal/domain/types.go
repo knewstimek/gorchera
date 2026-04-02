@@ -292,6 +292,7 @@ type Step struct {
 	TaskText         string            `json:"task_text"`
 	Status           StepStatus        `json:"status"`
 	Summary          string            `json:"summary,omitempty"`
+	DiffSummary      string            `json:"diff_summary,omitempty"`
 	Artifacts        []string          `json:"artifacts,omitempty"`
 	BlockedReason    string            `json:"blocked_reason,omitempty"`
 	ErrorReason      string            `json:"error_reason,omitempty"`

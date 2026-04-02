@@ -67,3 +67,33 @@ func TestStateStoreSaveLoadAndListChains(t *testing.T) {
 		t.Fatalf("expected chains sorted by created_at descending, got %q then %q", chains[0].ID, chains[1].ID)
 	}
 }
+
+func TestStateStoreSaveJobOverwritesExistingFile(t *testing.T) {
+	t.Parallel()
+
+	state := NewStateStore(t.TempDir())
+	job := &domain.Job{
+		ID:        "job-overwrite",
+		Status:    domain.JobStatusStarting,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	if err := state.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveJob first write returned error: %v", err)
+	}
+
+	job.Status = domain.JobStatusRunning
+	job.UpdatedAt = time.Now().UTC()
+	if err := state.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveJob overwrite returned error: %v", err)
+	}
+
+	loaded, err := state.LoadJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("LoadJob returned error: %v", err)
+	}
+	if loaded.Status != domain.JobStatusRunning {
+		t.Fatalf("expected overwritten job status %q, got %q", domain.JobStatusRunning, loaded.Status)
+	}
+}
