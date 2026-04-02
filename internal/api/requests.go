@@ -24,6 +24,10 @@ type RejectJobRequest struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type SteerJobRequest struct {
+	Message string `json:"message"`
+}
+
 type StartHarnessProcessRequest struct {
 	Name           string               `json:"name,omitempty"`
 	Category       runtimeexec.Category `json:"category,omitempty"`
