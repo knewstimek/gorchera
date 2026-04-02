@@ -25,9 +25,11 @@ const (
 
 type Config struct {
 	ServerBin     string
+	ServerArgs    []string
 	Workdir       string
 	Scenario      string
 	RecoveryJobs  int
+	RecoverJobIDs []string
 	KeepWorkdir   bool
 	WaitTimeout   time.Duration
 	RecoveryState domain.JobStatus
@@ -208,9 +210,31 @@ func runRecovery(cfg Config) (*Summary, error) {
 	}
 	defer c.close()
 
+	selected := make(map[string]struct{}, len(cfg.RecoverJobIDs))
+	for _, jobID := range cfg.RecoverJobIDs {
+		jobID = strings.TrimSpace(jobID)
+		if jobID != "" {
+			selected[jobID] = struct{}{}
+		}
+	}
+
+	stateStore := store.NewStateStore(filepath.Join(cfg.Workdir, ".gorchera", "state"))
 	statuses := make(map[string]string, len(seeded))
 	callID := 10
 	for _, seededJob := range seeded {
+		if len(selected) > 0 {
+			if _, ok := selected[seededJob.ID]; !ok {
+				current, err := stateStore.LoadJob(context.Background(), seededJob.ID)
+				if err != nil {
+					return nil, err
+				}
+				statuses[current.ID] = string(current.Status)
+				if current.Status != cfg.RecoveryState {
+					return nil, fmt.Errorf("unselected job %s unexpectedly changed to %s", current.ID, current.Status)
+				}
+				continue
+			}
+		}
 		statusMsg, err := c.call(callID, "tools/call", toolCallParams{
 			Name: "gorchera_status",
 			Arguments: map[string]any{
@@ -246,7 +270,7 @@ func runRecovery(cfg Config) (*Summary, error) {
 }
 
 func startClient(cfg Config) (*client, *initializeResult, *toolsListResult, error) {
-	c, err := newClient(cfg.ServerBin, cfg.Workdir)
+	c, err := newClient(cfg.ServerBin, cfg.Workdir, cfg.ServerArgs...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -275,8 +299,9 @@ func startClient(cfg Config) (*client, *initializeResult, *toolsListResult, erro
 	return c, &init, &tools, nil
 }
 
-func newClient(binPath, workdir string) (*client, error) {
-	cmd := exec.Command(binPath, "mcp")
+func newClient(binPath, workdir string, serverArgs ...string) (*client, error) {
+	args := append([]string{"mcp"}, serverArgs...)
+	cmd := exec.Command(binPath, args...)
 	cmd.Dir = workdir
 
 	stdin, err := cmd.StdinPipe()

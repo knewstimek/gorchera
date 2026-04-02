@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gorchera/internal/domain"
@@ -21,6 +22,8 @@ func main() {
 	keepWorkdir := fs.Bool("keep-workdir", false, "keep the smoke workdir after completion")
 	waitTimeout := fs.Duration("wait-timeout", 20*time.Second, "per-call MCP timeout")
 	recoveryState := fs.String("recovery-state", string(domain.JobStatusStarting), "seeded recovery state: starting | running | waiting_leader | waiting_worker")
+	startupRecover := fs.Bool("startup-recover", false, "pass -recover to the launched gorchera mcp subprocess")
+	startupRecoverJobs := fs.String("startup-recover-jobs", "", "comma-separated job IDs to pass via -recover-jobs to the launched gorchera mcp subprocess")
 	fs.Parse(os.Args[1:])
 
 	if *serverBin == "" {
@@ -37,11 +40,21 @@ func main() {
 		*workdir = tmp
 	}
 
+	serverArgs := make([]string, 0, 3)
+	if *startupRecover {
+		serverArgs = append(serverArgs, "-recover")
+	}
+	if jobs := splitCSV(*startupRecoverJobs); len(jobs) > 0 {
+		serverArgs = append(serverArgs, "-recover-jobs", strings.Join(jobs, ","))
+	}
+
 	summary, err := mcpsmoke.Run(mcpsmoke.Config{
 		ServerBin:     absOrSelf(*serverBin),
+		ServerArgs:    serverArgs,
 		Workdir:       absOrSelf(*workdir),
 		Scenario:      *scenario,
 		RecoveryJobs:  *recoveryJobs,
+		RecoverJobIDs: splitCSV(*startupRecoverJobs),
 		KeepWorkdir:   *keepWorkdir,
 		WaitTimeout:   *waitTimeout,
 		RecoveryState: domain.JobStatus(*recoveryState),
@@ -65,4 +78,19 @@ func absOrSelf(path string) string {
 		return path
 	}
 	return abs
+}
+
+func splitCSV(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

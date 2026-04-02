@@ -123,15 +123,35 @@ func (s *Service) Shutdown() {
 // would be stuck in "starting" or "waiting_*" forever because the goroutine
 // that drives runLoop was lost. Call this once after NewService.
 func (s *Service) RecoverJobs() {
+	s.recoverJobs(nil)
+}
+
+func (s *Service) RecoverSelectedJobs(jobIDs []string) {
+	s.recoverJobs(jobIDs)
+}
+
+func (s *Service) recoverJobs(jobIDs []string) {
 	ctx := context.Background()
 	jobs, err := s.state.ListJobs(ctx)
 	if err != nil {
 		log.Printf("[gorchera] recovery: failed to list jobs: %v", err)
 		return
 	}
+	filter := make(map[string]struct{}, len(jobIDs))
+	for _, jobID := range jobIDs {
+		jobID = strings.TrimSpace(jobID)
+		if jobID != "" {
+			filter[jobID] = struct{}{}
+		}
+	}
 	recoverable := make([]domain.Job, 0, len(jobs))
 	for i := range jobs {
 		job := jobs[i]
+		if len(filter) > 0 {
+			if _, ok := filter[job.ID]; !ok {
+				continue
+			}
+		}
 		switch job.Status {
 		case domain.JobStatusStarting, domain.JobStatusRunning,
 			domain.JobStatusWaitingLeader, domain.JobStatusWaitingWorker:
@@ -161,6 +181,10 @@ func (s *Service) RecoverJobs() {
 		}
 	}(recoverable)
 
+	if len(filter) > 0 {
+		log.Printf("[gorchera] recovery: scheduled %d selected jobs with max concurrency %d", len(recoverable), recoveryConcurrency)
+		return
+	}
 	log.Printf("[gorchera] recovery: scheduled %d jobs with max concurrency %d", len(recoverable), recoveryConcurrency)
 }
 

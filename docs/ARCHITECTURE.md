@@ -58,9 +58,11 @@ Notes:
 
 ## Recovery Semantics
 
-- `RecoverJobs()` only runs for long-lived controller entry points (`gorchera serve`, `gorchera mcp`), not for one-shot CLI commands such as `run`, `status`, or `resume`.
+- Startup recovery is disabled by default for both `gorchera serve` and `gorchera mcp`.
+- Operators must opt in with `-recover` for all recoverable jobs or `-recover-jobs job1,job2` for selected job IDs.
 - Recoverable jobs are the persisted non-terminal states: `starting`, `running`, `waiting_leader`, `waiting_worker`.
 - Recovery schedules jobs oldest-first with a bounded concurrency of 2 so a restart cannot stampede the provider with every stale job at once.
+- `RecoverSelectedJobs()` applies the same bounded scheduling, but only for the explicitly listed job IDs.
 
 ## Core Loop
 

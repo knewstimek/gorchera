@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -43,9 +44,6 @@ func main() {
 
 	sessionManager := provider.NewSessionManager(registry)
 	service := orchestrator.NewService(sessionManager, stateStore, artifactStore, workspaceRoot)
-	if shouldRecoverJobs(os.Args[1]) {
-		service.RecoverJobs()
-	}
 
 	ctx := context.Background()
 
@@ -91,23 +89,58 @@ func main() {
 	case "serve":
 		serve(service, os.Args[2:])
 	case "mcp":
-		mcpServer := mcp.NewServer(service)
-		if err := mcpServer.Run(); err != nil {
-			log.Fatal(err)
-		}
+		runMCP(service, os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
 	}
 }
 
-func shouldRecoverJobs(command string) bool {
-	switch strings.TrimSpace(command) {
-	case "serve", "mcp":
-		return true
-	default:
-		return false
+type startupRecoverOptions struct {
+	enabled bool
+	jobIDs  []string
+}
+
+func parseServeOptions(args []string) (string, startupRecoverOptions, error) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	recover := fs.Bool("recover", false, "recover interrupted jobs on startup")
+	recoverJobs := fs.String("recover-jobs", "", "comma-separated job IDs to recover on startup")
+	if err := fs.Parse(args); err != nil {
+		return "", startupRecoverOptions{}, err
 	}
+	jobIDs := splitCSV(*recoverJobs)
+	return *addr, startupRecoverOptions{
+		enabled: *recover || len(jobIDs) > 0,
+		jobIDs:  jobIDs,
+	}, nil
+}
+
+func parseMCPOptions(args []string) (startupRecoverOptions, error) {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	recover := fs.Bool("recover", false, "recover interrupted jobs on startup")
+	recoverJobs := fs.String("recover-jobs", "", "comma-separated job IDs to recover on startup")
+	if err := fs.Parse(args); err != nil {
+		return startupRecoverOptions{}, err
+	}
+	jobIDs := splitCSV(*recoverJobs)
+	return startupRecoverOptions{
+		enabled: *recover || len(jobIDs) > 0,
+		jobIDs:  jobIDs,
+	}, nil
+}
+
+func applyStartupRecovery(service *orchestrator.Service, opts startupRecoverOptions) {
+	if !opts.enabled {
+		return
+	}
+	if len(opts.jobIDs) > 0 {
+		service.RecoverSelectedJobs(opts.jobIDs)
+		return
+	}
+	service.RecoverJobs()
 }
 
 func run(ctx context.Context, service *orchestrator.Service, args []string) {
@@ -538,13 +571,28 @@ func stream(args []string) {
 }
 
 func serve(service *orchestrator.Service, args []string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
-	fs.Parse(args)
+	addr, recoverOpts, err := parseServeOptions(args)
+	if err != nil {
+		log.Fatal(err)
+	}
+	applyStartupRecovery(service, recoverOpts)
 
 	server := api.NewServer(service)
-	fmt.Printf("gorchera API listening on %s\n", *addr)
-	log.Fatal(http.ListenAndServe(*addr, server.Handler()))
+	fmt.Printf("gorchera API listening on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, server.Handler()))
+}
+
+func runMCP(service *orchestrator.Service, args []string) {
+	recoverOpts, err := parseMCPOptions(args)
+	if err != nil {
+		log.Fatal(err)
+	}
+	applyStartupRecovery(service, recoverOpts)
+
+	mcpServer := mcp.NewServer(service)
+	if err := mcpServer.Run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func splitCSV(raw string) []string {
@@ -572,6 +620,7 @@ func printJSON(v any) {
 
 func usage() {
 	fmt.Println("gorchera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|mcp> [flags]")
+	fmt.Println("  serve/mcp startup recovery is disabled by default; use -recover or -recover-jobs job1,job2 to enable it explicitly.")
 }
 
 func loadRoleProfiles(path string, base domain.ProviderName) (domain.RoleProfiles, error) {

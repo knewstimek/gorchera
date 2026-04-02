@@ -405,7 +405,7 @@ func toolList() []toolDef {
 		},
 		{
 			Name:        "gorchera_resume",
-			Description: "Resume a blocked job.",
+			Description: "Resume a specific recoverable job. Intended for blocked or interrupted non-terminal jobs; failed jobs should use gorchera_retry.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{

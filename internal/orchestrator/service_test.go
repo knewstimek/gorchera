@@ -2183,6 +2183,39 @@ func TestServiceRecoverJobsCapsConcurrentRecovery(t *testing.T) {
 	waitForLeaderCalls(t, control, 3, 2*time.Second)
 }
 
+func TestServiceRecoverSelectedJobsOnlySchedulesRequestedIDs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	control := newGatedLeaderProvider(domain.ProviderName("recover-selected"))
+	registry.Register(control)
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		stateStore,
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-selected-1")
+	target := saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-selected-2")
+	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-selected-3")
+
+	service.RecoverSelectedJobs([]string{target.ID})
+
+	waitForLeaderStart(t, control.started, "selected recovered job to start")
+	select {
+	case <-control.started:
+		t.Fatal("expected only the selected recoverable job to be scheduled")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(control.release)
+	waitForLeaderCalls(t, control, 1, 2*time.Second)
+}
+
 type gatedLeaderProvider struct {
 	name        domain.ProviderName
 	started     chan struct{}

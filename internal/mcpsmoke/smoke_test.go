@@ -46,6 +46,7 @@ func TestRunRecoveryScenarioCompletesSeededJobs(t *testing.T) {
 
 	summary, err := Run(Config{
 		ServerBin:     serverBin,
+		ServerArgs:    []string{"-recover"},
 		Workdir:       workdir,
 		Scenario:      "recovery",
 		RecoveryJobs:  3,
@@ -69,6 +70,40 @@ func TestRunRecoveryScenarioCompletesSeededJobs(t *testing.T) {
 	}
 	if !strings.Contains(summary.Stderr, "scheduled 3 jobs with max concurrency 2") {
 		t.Fatalf("expected recovery scheduling log, stderr=%q", summary.Stderr)
+	}
+}
+
+func TestRunRecoveryScenarioSupportsSelectedStartupRecovery(t *testing.T) {
+	t.Parallel()
+
+	serverBin := buildGorcheraBinary(t)
+	workdir := t.TempDir()
+
+	summary, err := Run(Config{
+		ServerBin:     serverBin,
+		ServerArgs:    []string{"-recover-jobs", "recovery-job-02"},
+		Workdir:       workdir,
+		Scenario:      "recovery",
+		RecoveryJobs:  3,
+		RecoverJobIDs: []string{"recovery-job-02"},
+		KeepWorkdir:   true,
+		WaitTimeout:   20 * time.Second,
+		RecoveryState: domain.JobStatusStarting,
+	})
+	if err != nil {
+		t.Fatalf("Run(recovery selected) returned error: %v", err)
+	}
+	if got := summary.RecoveredStatuses["recovery-job-02"]; got != string(domain.JobStatusDone) {
+		t.Fatalf("selected job status = %q, want done", got)
+	}
+	if got := summary.RecoveredStatuses["recovery-job-01"]; got != string(domain.JobStatusStarting) {
+		t.Fatalf("unselected job 01 status = %q, want starting", got)
+	}
+	if got := summary.RecoveredStatuses["recovery-job-03"]; got != string(domain.JobStatusStarting) {
+		t.Fatalf("unselected job 03 status = %q, want starting", got)
+	}
+	if !strings.Contains(summary.Stderr, "scheduled 1 selected jobs with max concurrency 2") {
+		t.Fatalf("expected selected recovery scheduling log, stderr=%q", summary.Stderr)
 	}
 }
 
