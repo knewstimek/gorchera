@@ -268,7 +268,6 @@ func ambitionEvaluationGuidance(level string) string {
 }
 
 func buildEvaluatorPrompt(job domain.Job) string {
-	payload, _ := json.MarshalIndent(job, "", "  ")
 	contractPayload := "{}"
 	if job.VerificationContract != nil {
 		if data, err := json.MarshalIndent(job.VerificationContract, "", "  "); err == nil {
@@ -316,7 +315,7 @@ Current job state:
 
 Verification contract:
 %s
-`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, string(payload), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, buildCompactEvaluatorPayload(job), contractPayload))
 }
 
 func buildLeaderPrompt(job domain.Job) string {
@@ -565,6 +564,133 @@ func buildMinimalPayload(job domain.Job) string {
 	return string(raw)
 }
 
+// buildCompactExecutorPayload returns a minimal job context for executor workers.
+// Includes workspace info and previous failure reason only -- not the full job
+// JSON, all step results, or verification contract details.
+func buildCompactExecutorPayload(job domain.Job, task domain.LeaderOutput) string {
+	type prevFailure struct {
+		StepIndex int    `json:"step_index"`
+		TaskType  string `json:"task_type"`
+		Reason    string `json:"reason"`
+	}
+	type compactPayload struct {
+		JobID         string       `json:"job_id,omitempty"`
+		WorkspaceDir  string       `json:"workspace_dir,omitempty"`
+		WorkspaceMode string       `json:"workspace_mode,omitempty"`
+		PrevFailure   *prevFailure `json:"previous_failure,omitempty"`
+	}
+	out := compactPayload{
+		JobID:         job.ID,
+		WorkspaceDir:  job.WorkspaceDir,
+		WorkspaceMode: job.WorkspaceMode,
+	}
+	// Surface the most recent failed/blocked step so the executor can learn
+	// from the previous attempt without receiving the full step history.
+	for i := len(job.Steps) - 1; i >= 0; i-- {
+		s := job.Steps[i]
+		if s.Status == domain.StepStatusFailed || s.Status == domain.StepStatusBlocked {
+			reason := firstNonEmpty(s.ErrorReason, s.BlockedReason, s.Summary)
+			if reason != "" {
+				out.PrevFailure = &prevFailure{
+					StepIndex: s.Index,
+					TaskType:  s.TaskType,
+					Reason:    reason,
+				}
+			}
+			break
+		}
+	}
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	return string(raw)
+}
+
+// buildCompactReviewerPayload returns a focused job context for reviewer workers.
+// Includes goal, step statuses, and diff summaries so the reviewer has the
+// evidence it needs without the full job JSON.
+func buildCompactReviewerPayload(job domain.Job, task domain.LeaderOutput) string {
+	type stepEvidence struct {
+		Index    int    `json:"index"`
+		TaskType string `json:"task_type"`
+		Status   string `json:"status"`
+		Summary  string `json:"summary,omitempty"`
+		Diff     string `json:"diff_summary,omitempty"`
+	}
+	type compactPayload struct {
+		JobID        string         `json:"job_id,omitempty"`
+		Goal         string         `json:"goal"`
+		WorkspaceDir string         `json:"workspace_dir,omitempty"`
+		Steps        []stepEvidence `json:"steps"`
+	}
+	steps := make([]stepEvidence, 0, len(job.Steps))
+	for _, s := range job.Steps {
+		summary := s.Summary
+		if len([]rune(summary)) > 120 {
+			summary = string([]rune(summary)[:120]) + "..."
+		}
+		steps = append(steps, stepEvidence{
+			Index:    s.Index,
+			TaskType: s.TaskType,
+			Status:   string(s.Status),
+			Summary:  summary,
+			Diff:     s.DiffSummary,
+		})
+	}
+	out := compactPayload{
+		JobID:        job.ID,
+		Goal:         job.Goal,
+		WorkspaceDir: job.WorkspaceDir,
+		Steps:        steps,
+	}
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	return string(raw)
+}
+
+// buildCompactEvaluatorPayload returns a compact job state for the evaluator.
+// Includes goal, status, role profiles, and step summaries. Omits events,
+// planning artifacts, and raw step task texts to reduce prompt size.
+// Role profiles are included so the evaluator knows which models ran each role.
+func buildCompactEvaluatorPayload(job domain.Job) string {
+	type stepEvidence struct {
+		Index    int    `json:"index"`
+		TaskType string `json:"task_type"`
+		Status   string `json:"status"`
+		Summary  string `json:"summary,omitempty"`
+	}
+	type compactPayload struct {
+		JobID        string              `json:"job_id,omitempty"`
+		Goal         string              `json:"goal"`
+		Status       string              `json:"status"`
+		CurrentStep  int                 `json:"current_step"`
+		Summary      string              `json:"summary,omitempty"`
+		RoleProfiles domain.RoleProfiles `json:"role_profiles"`
+		Steps        []stepEvidence      `json:"steps"`
+	}
+	steps := make([]stepEvidence, 0, len(job.Steps))
+	for _, s := range job.Steps {
+		summary := s.Summary
+		if len([]rune(summary)) > 150 {
+			summary = string([]rune(summary)[:150]) + "..."
+		}
+		steps = append(steps, stepEvidence{
+			Index:    s.Index,
+			TaskType: s.TaskType,
+			Status:   string(s.Status),
+			Summary:  summary,
+		})
+	}
+	out := compactPayload{
+		JobID:        job.ID,
+		Goal:         job.Goal,
+		Status:       string(job.Status),
+		CurrentStep:  job.CurrentStep,
+		Summary:      job.Summary,
+		RoleProfiles: job.RoleProfiles,
+		Steps:        steps,
+	}
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	return string(raw)
+}
+
 type workerTaskContext struct {
 	Objective     string
 	Why           string
@@ -666,7 +792,6 @@ func parseTaskSectionHeader(line string) (string, string, bool) {
 }
 
 func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
-	jobPayload, _ := json.MarshalIndent(job, "", "  ")
 	taskPayload, _ := json.MarshalIndent(task, "", "  ")
 	contractPayload := "{}"
 	taskContext := parseWorkerTaskContext(task.TaskText, job.LeaderContextSummary)
@@ -723,7 +848,7 @@ Job state:
 
 Verification contract:
 %s
-`, reviewerLabel, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, reviewerLabel, string(taskPayload), string(jobPayload), contractPayload))
+`, reviewerLabel, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, reviewerLabel, string(taskPayload), buildCompactReviewerPayload(job, task), contractPayload))
 	}
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are an executor worker assigned by the director. You perform the task described below. Report results accurately including files changed, commands run, and any errors encountered.
@@ -760,10 +885,7 @@ File management rules:
 
 Job state:
 %s
-
-Verification contract:
-%s
-`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), string(jobPayload), contractPayload))
+`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), buildCompactExecutorPayload(job, task)))
 }
 
 func profilePrompt(role domain.RoleName, job domain.Job) string {

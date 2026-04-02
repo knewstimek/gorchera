@@ -1810,6 +1810,248 @@ func TestSessionManagerDoesNotRetryFallbackModelAfterFallbackProviderSelection(t
 	}
 }
 
+func TestBuildWorkerPromptExecutorOmitsFullJobJSON(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:            "job-compact-exec-01",
+		Goal:          "Test compact executor payload omits full job JSON",
+		Provider:      domain.ProviderMock,
+		WorkspaceDir:  "/workspace/exec-test",
+		WorkspaceMode: "isolated",
+		RunOwnerID:    "svc-sentinel-exec",
+		Constraints:   []string{"ASCII only"},
+		Steps: []domain.Step{
+			{Index: 1, TaskType: "implement", Status: domain.StepStatusFailed,
+				ErrorReason: "build failed: missing return statement", Summary: "first attempt"},
+		},
+		Events: []domain.Event{
+			{Kind: "job_created", Message: "created"},
+		},
+	}
+	task := domain.LeaderOutput{
+		Action: "run_worker", Target: "B", TaskType: "implement",
+		TaskText: "Fix the return statement",
+	}
+
+	prompt := buildWorkerPrompt(job, task)
+
+	// Full job JSON sentinel fields must NOT appear -- they are not needed by the executor.
+	if strings.Contains(prompt, "svc-sentinel-exec") {
+		t.Fatal("executor prompt must not include run_owner_id from full job JSON")
+	}
+	if strings.Contains(prompt, `"job_created"`) {
+		t.Fatal("executor prompt must not include events from full job JSON")
+	}
+
+	// Required context must be present.
+	if !strings.Contains(prompt, "/workspace/exec-test") {
+		t.Fatal("executor prompt must include workspace_dir")
+	}
+	if !strings.Contains(prompt, "build failed: missing return statement") {
+		t.Fatal("executor prompt must include previous failure reason")
+	}
+	if !strings.Contains(prompt, "You are an executor worker") {
+		t.Fatal("expected executor role prompt")
+	}
+}
+
+// TestBuildWorkerPromptExecutorOmitsVerificationContract verifies that the
+// executor prompt does NOT include verification-contract content.
+// The sprint contract forbids executors from seeing the contract details;
+// only the reviewer and evaluator prompt paths should receive them.
+func TestBuildWorkerPromptExecutorOmitsVerificationContract(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:           "job-compact-exec-nocontract",
+		Goal:         "Verify executor prompt excludes verification contract",
+		Provider:     domain.ProviderMock,
+		WorkspaceDir: "/workspace/nocontract-test",
+		VerificationContract: &domain.VerificationContract{
+			Version: 1,
+			Goal:    "contract-sentinel-goal",
+			Scope:   []string{"contract-sentinel-scope"},
+			Notes:   "contract-sentinel-notes",
+		},
+	}
+	task := domain.LeaderOutput{
+		Action:   "run_worker",
+		Target:   "B",
+		TaskType: "implement",
+		TaskText: "Implement something",
+	}
+
+	prompt := buildWorkerPrompt(job, task)
+
+	// Verification contract sentinel values must NOT appear in the executor prompt.
+	if strings.Contains(prompt, "contract-sentinel-goal") {
+		t.Fatal("executor prompt must not include VerificationContract.Goal")
+	}
+	if strings.Contains(prompt, "contract-sentinel-scope") {
+		t.Fatal("executor prompt must not include VerificationContract.Scope")
+	}
+	if strings.Contains(prompt, "contract-sentinel-notes") {
+		t.Fatal("executor prompt must not include VerificationContract.Notes")
+	}
+	if strings.Contains(prompt, "Verification contract:") {
+		t.Fatal("executor prompt must not include a Verification contract section")
+	}
+	// Workspace info must still be present.
+	if !strings.Contains(prompt, "/workspace/nocontract-test") {
+		t.Fatal("executor prompt must still include workspace_dir")
+	}
+}
+
+func TestBuildWorkerPromptReviewerOmitsFullJobJSON(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:           "job-compact-rev-02",
+		Goal:         "Test compact reviewer payload omits full job JSON",
+		Provider:     domain.ProviderMock,
+		WorkspaceDir: "/workspace/rev-test",
+		RunOwnerID:   "svc-sentinel-rev",
+		Steps: []domain.Step{
+			{Index: 1, TaskType: "implement", Status: domain.StepStatusSucceeded,
+				Summary:     "changed protocol.go to use compact payloads",
+				DiffSummary: "+buildCompact -fullJobDump"},
+		},
+	}
+	task := domain.LeaderOutput{
+		Action: "run_worker", Target: "C", TaskType: "review",
+		TaskText: "Review the compact payload change",
+	}
+
+	prompt := buildWorkerPrompt(job, task)
+
+	// Full job JSON sentinel field must NOT appear.
+	if strings.Contains(prompt, "svc-sentinel-rev") {
+		t.Fatal("reviewer prompt must not include run_owner_id from full job JSON")
+	}
+
+	// Diff summary evidence must be present so the reviewer can review the change.
+	if !strings.Contains(prompt, "+buildCompact -fullJobDump") {
+		t.Fatal("reviewer prompt must include diff_summary from implement step")
+	}
+	if !strings.Contains(prompt, "You are a reviewer component") {
+		t.Fatal("expected reviewer role prompt")
+	}
+}
+
+func TestBuildEvaluatorPromptOmitsFullJobJSON(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:         "job-compact-eval-03",
+		Goal:       "Test compact evaluator payload omits full job JSON",
+		Provider:   domain.ProviderMock,
+		RunOwnerID: "svc-sentinel-eval",
+		Status:     domain.JobStatusRunning,
+		RoleProfiles: domain.RoleProfiles{
+			Evaluator: domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "compact-eval-model"},
+		},
+		Steps: []domain.Step{
+			{Index: 1, TaskType: "implement", Status: domain.StepStatusSucceeded,
+				Summary: "implemented compact payload builders"},
+		},
+		Events: []domain.Event{
+			{Kind: "worker_requested", Message: "B:implement"},
+		},
+	}
+
+	prompt := buildEvaluatorPrompt(job)
+
+	// Full job JSON sentinel fields must NOT appear.
+	if strings.Contains(prompt, "svc-sentinel-eval") {
+		t.Fatal("evaluator prompt must not include run_owner_id from full job JSON")
+	}
+	if strings.Contains(prompt, `"worker_requested"`) {
+		t.Fatal("evaluator prompt must not include events from full job JSON")
+	}
+
+	// Role profile must still be present (evaluator needs to know which models ran).
+	if !strings.Contains(prompt, "compact-eval-model") {
+		t.Fatal("evaluator prompt must include role profile model for context")
+	}
+
+	// Step evidence must be present.
+	if !strings.Contains(prompt, "implemented compact payload builders") {
+		t.Fatal("evaluator prompt must include step summaries")
+	}
+}
+
+func TestCompactExecutorPayloadIncludesRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:            "job-fields-01",
+		WorkspaceDir:  "/workspace/fields",
+		WorkspaceMode: "isolated",
+		Steps: []domain.Step{
+			{Index: 2, TaskType: "implement", Status: domain.StepStatusFailed,
+				ErrorReason: "compile error", Summary: "step 2 failed"},
+		},
+	}
+	task := domain.LeaderOutput{TaskType: "implement"}
+
+	payload := buildCompactExecutorPayload(job, task)
+
+	var out struct {
+		JobID         string `json:"job_id"`
+		WorkspaceDir  string `json:"workspace_dir"`
+		WorkspaceMode string `json:"workspace_mode"`
+		PrevFailure   *struct {
+			StepIndex int    `json:"step_index"`
+			TaskType  string `json:"task_type"`
+			Reason    string `json:"reason"`
+		} `json:"previous_failure"`
+	}
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		t.Fatalf("compact executor payload is not valid JSON: %v", err)
+	}
+	if out.WorkspaceDir != "/workspace/fields" {
+		t.Fatalf("expected workspace_dir /workspace/fields, got %q", out.WorkspaceDir)
+	}
+	if out.WorkspaceMode != "isolated" {
+		t.Fatalf("expected workspace_mode isolated, got %q", out.WorkspaceMode)
+	}
+	if out.PrevFailure == nil {
+		t.Fatal("expected previous_failure to be populated for failed step")
+	}
+	if out.PrevFailure.Reason != "compile error" {
+		t.Fatalf("expected prev failure reason 'compile error', got %q", out.PrevFailure.Reason)
+	}
+}
+
+func TestCompactReviewerPayloadIncludesDiffSummary(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		ID:   "job-diff-01",
+		Goal: "reviewer gets diff",
+		Steps: []domain.Step{
+			{Index: 1, TaskType: "implement", Status: domain.StepStatusSucceeded,
+				Summary: "added compact builders", DiffSummary: "+3 functions, -1 raw dump"},
+		},
+	}
+	task := domain.LeaderOutput{TaskType: "review"}
+
+	payload := buildCompactReviewerPayload(job, task)
+
+	var out struct {
+		Steps []struct {
+			Diff string `json:"diff_summary"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		t.Fatalf("compact reviewer payload is not valid JSON: %v", err)
+	}
+	if len(out.Steps) == 0 || out.Steps[0].Diff != "+3 functions, -1 raw dump" {
+		t.Fatalf("expected diff_summary in reviewer payload steps, got %+v", out.Steps)
+	}
+}
+
 type leaderOnlyAdapter struct {
 	name domain.ProviderName
 }

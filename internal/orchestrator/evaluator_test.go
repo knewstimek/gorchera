@@ -287,6 +287,169 @@ func TestBuildSprintContractLightRequiresImplementOnly(t *testing.T) {
 	}
 }
 
+func TestMergeEvaluatorReportConsistencyCheckDemotesContradictoryPassed(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		Steps: []domain.Step{
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
+		},
+	}
+	verification := VerificationContract{RequiredStepTypes: []string{"implement"}}
+	sprint := domain.SprintContract{
+		RequiredStepTypes:   []string{"implement"},
+		ThresholdSuccessCnt: 1,
+		StrictnessLevel:     "normal",
+	}
+
+	// Provider JSON says passed=true but reason text says "gate failure" -- contradiction.
+	providerReport := domain.EvaluatorReport{
+		Status: "passed",
+		Passed: true,
+		Score:  80,
+		Reason: "This is a gate failure, not a pass -- required checks are not satisfied.",
+	}
+
+	report := mergeEvaluatorReport(job, verification, sprint, providerReport)
+	if report.Passed {
+		t.Fatalf("expected consistency check to demote contradictory passed=true with failure text, got passed=true, status=%q, reason=%q", report.Status, report.Reason)
+	}
+	if report.Status == "passed" {
+		t.Fatalf("expected non-passing status after consistency check, got %q", report.Status)
+	}
+}
+
+func TestMergeEvaluatorReportConsistencyCheckPreservesCleanPassedReport(t *testing.T) {
+	t.Parallel()
+
+	job := domain.Job{
+		Steps: []domain.Step{
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
+		},
+	}
+	verification := VerificationContract{RequiredStepTypes: []string{"implement"}}
+	sprint := domain.SprintContract{
+		RequiredStepTypes:   []string{"implement"},
+		ThresholdSuccessCnt: 1,
+		StrictnessLevel:     "normal",
+	}
+
+	// Clean pass: passed=true with an affirmative reason -- no contradiction.
+	providerReport := domain.EvaluatorReport{
+		Status: "passed",
+		Passed: true,
+		Score:  95,
+		Reason: "All required implement steps completed. Build and tests passed.",
+	}
+
+	report := mergeEvaluatorReport(job, verification, sprint, providerReport)
+	if !report.Passed {
+		t.Fatalf("expected clean passed report to remain passing, got %#v", report)
+	}
+	if report.Status != "passed" {
+		t.Fatalf("expected status passed, got %q", report.Status)
+	}
+}
+
+func TestEvaluatorConsistencyPhrasesAllTriggerDemotion(t *testing.T) {
+	t.Parallel()
+
+	phrases := []string{
+		"gate failure",
+		"not a pass",
+		"requirements not satisfied",
+		"contract not satisfied",
+		"did not pass",
+		"does not pass",
+		"cannot pass",
+		"not passing",
+		"fails the gate",
+	}
+
+	for _, phrase := range phrases {
+		phrase := phrase
+		t.Run(phrase, func(t *testing.T) {
+			t.Parallel()
+
+			report := domain.EvaluatorReport{
+				Status: "passed",
+				Passed: true,
+				Reason: "The implementation has an issue: " + phrase + " for required checks.",
+			}
+			if !evaluatorTextContradicts(report) {
+				t.Fatalf("expected phrase %q to trigger contradiction detection", phrase)
+			}
+		})
+	}
+}
+
+func TestEvaluatorConsistencyCheckIgnoresAlreadyFailedReport(t *testing.T) {
+	t.Parallel()
+
+	// A report with passed=false should never be considered contradictory
+	// (the text may describe failure, which is consistent with passed=false).
+	report := domain.EvaluatorReport{
+		Status: "failed",
+		Passed: false,
+		Reason: "gate failure: implement step did not pass.",
+	}
+	if evaluatorTextContradicts(report) {
+		t.Fatal("expected no contradiction when passed=false regardless of reason text")
+	}
+}
+
+// TestEvaluatorConsistencyNoFalsePositiveOnBorderlinePhrase verifies that
+// "not satisfied" in isolation (without a qualifying compound like
+// "requirements not satisfied") does NOT trigger contradiction demotion.
+// This guards against the false-positive case described in the review where a
+// legitimate passing explanation contains the substring "not satisfied" as part
+// of a different clause (e.g. "the concern was not satisfied by any attacker").
+func TestEvaluatorConsistencyNoFalsePositiveOnBorderlinePhrase(t *testing.T) {
+	t.Parallel()
+
+	borderlineCases := []string{
+		// "not satisfied" alone -- too broad, must not trigger
+		"All checks pass. The previous audit concern was not satisfied by any attacker vector after the fix.",
+		"The gate condition was not satisfied before the patch, but is now fully resolved.",
+		"Edge case was not satisfied in older versions; current version handles it correctly.",
+	}
+
+	for _, reason := range borderlineCases {
+		reason := reason
+		t.Run(reason[:40], func(t *testing.T) {
+			t.Parallel()
+			report := domain.EvaluatorReport{
+				Status: "passed",
+				Passed: true,
+				Reason: reason,
+			}
+			if evaluatorTextContradicts(report) {
+				t.Fatalf("false positive: borderline reason should not trigger contradiction: %q", reason)
+			}
+		})
+	}
+
+	// Compound forms must still trigger.
+	triggerCases := []string{
+		"requirements not satisfied: build step missing",
+		"contract not satisfied for this job",
+	}
+	for _, reason := range triggerCases {
+		reason := reason
+		t.Run("triggers:"+reason[:20], func(t *testing.T) {
+			t.Parallel()
+			report := domain.EvaluatorReport{
+				Status: "passed",
+				Passed: true,
+				Reason: reason,
+			}
+			if !evaluatorTextContradicts(report) {
+				t.Fatalf("expected compound phrase to trigger contradiction: %q", reason)
+			}
+		})
+	}
+}
+
 func writeEngineArtifactsForTest(t *testing.T, buildStatus, testStatus string) []string {
 	t.Helper()
 

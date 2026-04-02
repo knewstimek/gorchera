@@ -144,7 +144,47 @@ func summaryEvidence(job *domain.Job) []string {
 	return evidence
 }
 
+// evaluatorTextContradicts returns true when the evaluator reason explicitly
+// signals a gate failure while passed=true. Detects cases where the structured
+// JSON output disagrees with the evaluator's own prose explanation, which can
+// happen when a provider emits passed=true but explains a failing gate in text.
+func evaluatorTextContradicts(report domain.EvaluatorReport) bool {
+	if !report.Passed {
+		return false // no contradiction when already not passing
+	}
+	reason := strings.ToLower(strings.TrimSpace(report.Reason))
+	// Narrow set of phrases that unambiguously signal a failed gate.
+	// Broad phrases are intentionally excluded to avoid false positives on
+	// evaluators that quote failure conditions while explaining why they pass.
+	// "not satisfied" alone is excluded -- it can appear in legitimate passing
+	// explanations (e.g. "concern was not satisfied by any attacker vector").
+	// Use the more specific compound forms instead.
+	failurePhrases := []string{
+		"gate failure",
+		"not a pass",
+		"requirements not satisfied",
+		"contract not satisfied",
+		"did not pass",
+		"does not pass",
+		"cannot pass",
+		"not passing",
+		"fails the gate",
+	}
+	for _, phrase := range failurePhrases {
+		if strings.Contains(reason, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func mergeEvaluatorReport(job domain.Job, verification VerificationContract, sprint domain.SprintContract, providerReport domain.EvaluatorReport) *domain.EvaluatorReport {
+	// Detect contradiction before any merge modifies the original text.
+	// Applied as a final override at the end so it cannot be undone by
+	// rule-based verification passing (rulePassed does not override a
+	// contradiction between the evaluator's JSON and prose).
+	contradicted := evaluatorTextContradicts(providerReport)
+
 	verificationPassed, verificationMissing := verificationSatisfiedForPipeline(job, verification, sprint)
 	rulePassed := verificationPassed && len(successfulStepTypes(&job)) >= sprint.ThresholdSuccessCnt
 	missing := verificationMissing
@@ -189,6 +229,19 @@ func mergeEvaluatorReport(job domain.Job, verification VerificationContract, spr
 		} else {
 			report.Reason = "evaluator blocked completion"
 		}
+	}
+
+	// Final consistency gate: if the evaluator's own text explicitly signals a
+	// gate failure while the merged result says passed, demote. This fires after
+	// all rule-based and rubric logic so it is always the last word.
+	// Rationale: the evaluator may emit passed=true in JSON but explain a
+	// concrete gate failure in prose; the prose is authoritative in that case.
+	if contradicted && report.Passed {
+		report.Passed = false
+		if report.Status == "passed" {
+			report.Status = "failed"
+		}
+		report.Reason = "[consistency] " + report.Reason
 	}
 
 	// Apply rubric axis threshold enforcement when axes are defined.
