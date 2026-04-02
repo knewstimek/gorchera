@@ -22,16 +22,15 @@ go test ./...
 
 ## 현재 상태 (상세: `docs/IMPLEMENTATION_STATUS.md`)
 
-- Known Bugs 전부 수정 (TOCTOU 포함)
-- Claude + Codex(GPT) 어댑터 실연동 완료
-- normal + strict 모드 done 수렴 달성 (GPT-only 파이프라인)
-- MCP server 구현 완료 (17+ 도구, notification 지원)
-- Leader 프롬프트에 sprint contract + strictness 규칙 삽입
-- Evaluator retry loop (blocked -> leader 재시도, 무한루프 방어)
-- In-memory job cache -- status API 실시간 반영
-- JobStatusPlanning -- planner 단계 가시성
-- Audit V2 CRITICAL/HIGH 수정 (XSS-1, XSS-2, H1, H2, H3)
-- Reviewer/Evaluator/Tester 프롬프트 하드닝 (역할별 분리)
+- **4-role pipeline**: director -> executor -> [engine build/test] -> reviewer -> evaluator
+- **pipeline_mode**: light (skip reviewer) / balanced (default) / full (fix loops)
+- **director** = planner + leader 합체, engine = 룰 기반 go build/test
+- Claude + Codex(GPT) 크로스 프로바이더 지원 (role_overrides on start_job)
+- ambition_level (low/medium/high), --effort flag, resume extra_steps
+- In-memory job cache, JobStatusPlanning, gorchera_diff MCP tool
+- Terminal notification (JSON-RPC 2.0 notifications/job_terminal)
+- task_why/invariants/scope_boundary worker context
+- Audit V2 CRITICAL/HIGH 수정 완료
 - GitHub: https://github.com/knewstimek/gorchera
 
 ## 문서 읽기 순서
@@ -51,21 +50,21 @@ go test ./...
 
 ## 기본 Role Profile (감독관 권장)
 
-provider=codex 기준, executor/reviewer/tester만 claude sonnet으로 override:
+provider=codex 기준, executor/reviewer만 claude sonnet으로 override:
 
 ```json
 {
   "provider": "codex",
+  "pipeline_mode": "light",
   "role_overrides": {
     "executor":  {"provider": "claude", "model": "sonnet"},
-    "reviewer":  {"provider": "claude", "model": "sonnet"},
-    "tester":    {"provider": "claude", "model": "sonnet"}
+    "reviewer":  {"provider": "claude", "model": "sonnet"}
   }
 }
 ```
 
-결과: planner/leader/evaluator = GPT 5.4, executor/reviewer/tester = Claude Sonnet.
-GPT가 계획/판단, Claude가 실행/검토. 토큰 효율 + 크로스체크 효과.
+결과: director/evaluator = GPT 5.4, executor/reviewer = Claude Sonnet.
+GPT가 계획/판단, Claude가 실행/검토. light 모드 = $0.04/4min (기존 $0.12/10min 대비 70% 절감).
 
 ## 감독관 Goal 작성 가이드
 
