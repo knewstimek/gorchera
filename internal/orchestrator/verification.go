@@ -11,15 +11,19 @@ import (
 )
 
 type VerificationContract struct {
-	Version              int      `json:"version"`
-	Goal                 string   `json:"goal"`
-	Summary              string   `json:"summary"`
-	SprintContractRef    string   `json:"sprint_contract_ref,omitempty"`
-	PlanningArtifactRefs []string `json:"planning_artifact_refs,omitempty"`
-	RequiredStepTypes    []string `json:"required_step_types,omitempty"`
-	AcceptanceCriteria   []string `json:"acceptance_criteria,omitempty"`
-	TesterInstructions   []string `json:"tester_instructions,omitempty"`
-	EvaluatorCriteria    []string `json:"evaluator_criteria,omitempty"`
+	Version              int                `json:"version"`
+	Goal                 string             `json:"goal"`
+	Summary              string             `json:"summary"`
+	SprintContractRef    string             `json:"sprint_contract_ref,omitempty"`
+	PlanningArtifactRefs []string           `json:"planning_artifact_refs,omitempty"`
+	RequiredStepTypes    []string           `json:"required_step_types,omitempty"`
+	AcceptanceCriteria   []string           `json:"acceptance_criteria,omitempty"`
+	TesterInstructions   []string           `json:"tester_instructions,omitempty"`
+	EvaluatorCriteria    []string           `json:"evaluator_criteria,omitempty"`
+	// RubricAxes mirrors domain.VerificationContract.RubricAxes when loaded
+	// from a persisted contract JSON. Used by mergeEvaluatorReport to enforce
+	// per-axis score thresholds returned by the evaluator provider.
+	RubricAxes           []domain.RubricAxis `json:"rubric_axes,omitempty"`
 }
 
 func buildVerificationContract(job domain.Job, planning domain.PlanningArtifact, sprint domain.SprintContract, planningArtifactRefs []string) VerificationContract {

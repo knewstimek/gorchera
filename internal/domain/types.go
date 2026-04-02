@@ -240,7 +240,9 @@ type PlanningArtifact struct {
 	ProposedSteps        []string              `json:"proposed_steps,omitempty"`
 	Acceptance           []string              `json:"acceptance,omitempty"`
 	SuccessSignals       []string              `json:"success_signals,omitempty"`
-	VerificationContract *VerificationContract `json:"verification_contract,omitempty"`
+	VerificationContract  *VerificationContract `json:"verification_contract,omitempty"`
+	RecommendedStrictness string                `json:"recommended_strictness,omitempty"`
+	RecommendedMaxSteps   int                   `json:"recommended_max_steps,omitempty"`
 }
 
 type SprintContract struct {
@@ -255,17 +257,34 @@ type SprintContract struct {
 	StrictnessLevel      string   `json:"strictness_level,omitempty"` // strict | normal | lenient
 }
 
+// RubricAxis defines a scoring dimension for multi-axis evaluation.
+// When rubric_axes are present in a VerificationContract, the evaluator
+// must score each axis and the orchestrator enforces per-axis thresholds.
+type RubricAxis struct {
+	Name         string  `json:"name"`
+	Weight       float64 `json:"weight"`
+	MinThreshold float64 `json:"min_threshold"`
+}
+
+// RubricScore records the evaluator's score for a single rubric axis.
+type RubricScore struct {
+	Axis   string  `json:"axis"`
+	Score  float64 `json:"score"`
+	Passed bool    `json:"passed"`
+}
+
 type VerificationContract struct {
-	Version           int      `json:"version"`
-	Goal              string   `json:"goal"`
-	Scope             []string `json:"scope,omitempty"`
-	RequiredCommands  []string `json:"required_commands,omitempty"`
-	RequiredArtifacts []string `json:"required_artifacts,omitempty"`
-	RequiredChecks    []string `json:"required_checks,omitempty"`
-	DisallowedActions []string `json:"disallowed_actions,omitempty"`
-	MaxSeconds        int      `json:"max_seconds,omitempty"`
-	Notes             string   `json:"notes,omitempty"`
-	OwnerRole         RoleName `json:"owner_role,omitempty"`
+	Version           int          `json:"version"`
+	Goal              string       `json:"goal"`
+	Scope             []string     `json:"scope,omitempty"`
+	RequiredCommands  []string     `json:"required_commands,omitempty"`
+	RequiredArtifacts []string     `json:"required_artifacts,omitempty"`
+	RequiredChecks    []string     `json:"required_checks,omitempty"`
+	DisallowedActions []string     `json:"disallowed_actions,omitempty"`
+	MaxSeconds        int          `json:"max_seconds,omitempty"`
+	Notes             string       `json:"notes,omitempty"`
+	OwnerRole         RoleName     `json:"owner_role,omitempty"`
+	RubricAxes        []RubricAxis `json:"rubric_axes,omitempty"`
 }
 
 type VerificationReport struct {
@@ -292,13 +311,14 @@ type TokenUsage struct {
 }
 
 type EvaluatorReport struct {
-	Status           string   `json:"status"`
-	Passed           bool     `json:"passed"`
-	Score            int      `json:"score"`
-	Reason           string   `json:"reason,omitempty"`
-	MissingStepTypes []string `json:"missing_step_types,omitempty"`
-	Evidence         []string `json:"evidence,omitempty"`
-	ContractRef      string   `json:"contract_ref,omitempty"`
+	Status           string        `json:"status"`
+	Passed           bool          `json:"passed"`
+	Score            int           `json:"score"`
+	Reason           string        `json:"reason,omitempty"`
+	MissingStepTypes []string      `json:"missing_step_types,omitempty"`
+	Evidence         []string      `json:"evidence,omitempty"`
+	ContractRef      string        `json:"contract_ref,omitempty"`
+	RubricScores     []RubricScore `json:"rubric_scores,omitempty"`
 }
 
 type LeaderOutput struct {

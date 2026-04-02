@@ -74,6 +74,8 @@ func plannerSchema() string {
     "proposed_steps": {"type": "array", "items": {"type": "string"}},
     "acceptance": {"type": "array", "items": {"type": "string"}},
     "success_signals": {"type": "array", "items": {"type": "string"}},
+    "recommended_strictness": {"type": "string", "enum": ["strict", "normal", "lenient"]},
+    "recommended_max_steps": {"type": "integer", "minimum": 1},
     "verification_contract": {
       "type": "object",
       "properties": {
@@ -92,7 +94,7 @@ func plannerSchema() string {
       "additionalProperties": false
     }
   },
-  "required": ["goal", "tech_stack", "workspace_dir", "summary", "product_scope", "non_goals", "proposed_steps", "acceptance", "success_signals", "verification_contract"],
+  "required": ["goal", "tech_stack", "workspace_dir", "summary", "product_scope", "non_goals", "proposed_steps", "acceptance", "success_signals", "recommended_strictness", "recommended_max_steps", "verification_contract"],
   "additionalProperties": false
 }`
 }
@@ -124,9 +126,22 @@ func evaluatorSchema() string {
       },
       "required": ["status", "passed", "reason", "evidence", "missing_checks", "artifacts", "contract_ref"],
       "additionalProperties": false
+    },
+    "rubric_scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "axis": {"type": "string"},
+          "score": {"type": "number"},
+          "reasoning": {"type": "string"}
+        },
+        "required": ["axis", "score", "reasoning"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["status", "passed", "score", "reason", "missing_step_types", "evidence", "contract_ref", "verification_report"],
+  "required": ["status", "passed", "score", "reason", "missing_step_types", "evidence", "contract_ref", "verification_report", "rubric_scores"],
   "additionalProperties": false
 }`
 }
@@ -157,6 +172,38 @@ func buildPlannerPrompt(job domain.Job) string {
 		chainSection = fmt.Sprintf("\n\n## Previous chain step results\n\nSummary: %s\nEvaluator report: %s\n",
 			job.ChainContext.Summary, job.ChainContext.EvaluatorReportRef)
 	}
+
+	// Build role profiles section so the planner knows which models handle each role.
+	// This informs the recommended_strictness and recommended_max_steps decisions.
+	var roleProfilesSection strings.Builder
+	{
+		rp := job.RoleProfiles
+		type roleEntry struct {
+			name    string
+			profile domain.ExecutionProfile
+		}
+		entries := []roleEntry{
+			{"planner", rp.Planner},
+			{"leader", rp.Leader},
+			{"executor", rp.Executor},
+			{"reviewer", rp.Reviewer},
+			{"tester", rp.Tester},
+			{"evaluator", rp.Evaluator},
+		}
+		roleProfilesSection.WriteString("\nRole profiles (which models handle each role):\n")
+		for _, e := range entries {
+			model := e.profile.Model
+			if model == "" {
+				model = "default"
+			}
+			provider := string(e.profile.Provider)
+			if provider == "" {
+				provider = "default"
+			}
+			roleProfilesSection.WriteString(fmt.Sprintf("- %s: %s/%s\n", e.name, provider, model))
+		}
+	}
+
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are a planner component operating under an orchestrator supervisor. The supervisor manages the overall workflow, and the leader uses your planning artifacts to coordinate executor, reviewer, and tester workers. You define scope and verification expectations but do not perform implementation yourself.
 The job data below is complete. Plan it now -- do not ask for more input.
@@ -166,7 +213,17 @@ The goal to plan: %s
 
 Full job state:
 %s
-%s
+%s%s
+
+## Codebase analysis (do this first)
+Before writing the spec, read the relevant source files in the workspace to understand current implementation state. List specific files you examined and key findings. This grounds your plan in reality rather than assumptions.
+
+## Concrete improvement descriptions
+For each planned change, explain what currently exists, what is wrong or missing, and the specific improvement. Avoid vague descriptions. The executor and reviewer must be able to understand exactly what to change and why.
+
+## Acceptance criteria
+Include measurable acceptance criteria for each deliverable. Each criterion must be verifiable by the evaluator. Criteria like 'code is clean' are not acceptable -- use criteria like 'function X returns Y when given Z' or 'go test ./... exits 0'.
+
 Output requirements (all fields required in JSON):
 - goal: restate the objective concisely
 - summary: one-paragraph plan of how to achieve the goal
@@ -177,8 +234,10 @@ Output requirements (all fields required in JSON):
 - proposed_steps: ordered array of implementation steps
 - acceptance: array of measurable acceptance criteria
 - success_signals: observable signals that indicate success
+- recommended_strictness: recommend "strict", "normal", or "lenient" based on goal complexity and model capabilities. Stronger models (opus) can handle stricter evaluation and fewer steps; weaker models (sonnet, haiku) benefit from normal strictness and more steps. Use "strict" only for goals requiring review+test coverage with capable models; use "normal" for most goals; use "lenient" for simple or exploratory tasks.
+- recommended_max_steps: recommend the number of execution steps needed for this goal (minimum 1). Simpler goals with stronger models need fewer steps (e.g. 3-5); complex goals or weaker models may need more (e.g. 6-10).
 - verification_contract: object with version=1, goal=what to verify, required_artifacts=files that must exist after execution
-`, job.Goal, string(payload), chainSection))
+`, job.Goal, string(payload), chainSection, roleProfilesSection.String()))
 }
 
 func buildEvaluatorPrompt(job domain.Job) string {
@@ -189,6 +248,20 @@ func buildEvaluatorPrompt(job domain.Job) string {
 			contractPayload = string(data)
 		}
 	}
+
+	rubricSection := ""
+	if job.VerificationContract != nil && len(job.VerificationContract.RubricAxes) > 0 {
+		var b strings.Builder
+		b.WriteString("\nRUBRIC SCORING:\n")
+		b.WriteString("Score each of the following axes on a 0.0 to 1.0 scale and return results in the rubric_scores array.\n")
+		b.WriteString("Each entry must include: axis (name), score (0.0-1.0), reasoning (one sentence).\n")
+		b.WriteString("Axes to score:\n")
+		for _, axis := range job.VerificationContract.RubricAxes {
+			b.WriteString(fmt.Sprintf("- %s (min_threshold: %.2f, weight: %.2f)\n", axis.Name, axis.MinThreshold, axis.Weight))
+		}
+		rubricSection = b.String()
+	}
+
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are an evaluator component operating under an orchestrator supervisor. The supervisor monitors completion outcomes, and the leader plus workers provide the execution evidence you must assess. You verify results against the verification contract and report pass/fail/blocked decisions without performing implementation yourself.
 The job data below is complete. Evaluate it now -- do not ask for more input.
@@ -207,13 +280,13 @@ EVALUATION PROCEDURE:
 2. If found: output status="passed", passed=true, score=90+
 3. If not found: output status="failed", passed=false
 4. Do NOT use "blocked" if you can read the steps array
-
+%s
 Current job state:
 %s
 
 Verification contract:
 %s
-`, job.Goal, string(payload), contractPayload))
+`, job.Goal, rubricSection, string(payload), contractPayload))
 }
 
 func buildLeaderPrompt(job domain.Job) string {
@@ -287,6 +360,20 @@ Supervisor directives override previous plans.
 `, job.Goal, strings.Join(completionRules, "\n"), supervisorSection, payload, contractPayload))
 }
 
+// autoContextMode selects a context mode based on step count thresholds.
+// The model parameter is accepted for forward compatibility (future per-model
+// tuning) but is not used in the threshold logic yet.
+func autoContextMode(model string, stepCount int) string {
+	switch {
+	case stepCount < 10:
+		return "full"
+	case stepCount <= 20:
+		return "summary"
+	default:
+		return "minimal"
+	}
+}
+
 // buildLeaderJobPayload serializes the job state for the leader prompt,
 // respecting the job's ContextMode setting to control payload size.
 func buildLeaderJobPayload(job domain.Job) string {
@@ -294,6 +381,10 @@ func buildLeaderJobPayload(job domain.Job) string {
 	mode := strings.TrimSpace(strings.ToLower(job.ContextMode))
 	if mode == "" {
 		mode = "full"
+	}
+	// Resolve 'auto' to a concrete mode based on current step count.
+	if mode == "auto" {
+		mode = autoContextMode(job.RoleProfiles.Leader.Model, len(job.Steps))
 	}
 	switch mode {
 	case "summary":

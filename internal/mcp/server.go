@@ -215,7 +215,7 @@ func toolList() []toolDef {
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
-					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only", Default: "full"},
+					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
 				},
 				Required: []string{"goal"},
 			},
@@ -236,7 +236,7 @@ func toolList() []toolDef {
 								"goal":             {Type: "string", Description: "Natural-language goal for this chain step"},
 								"provider":         {Type: "string", Description: "Provider name: mock | codex | claude"},
 								"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
-								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal", Default: "full"},
+								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto (auto selects based on step count)", Default: "full"},
 								"max_steps":        {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
 								"role_overrides": {
 									Type:        "object",

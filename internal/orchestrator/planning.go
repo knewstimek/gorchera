@@ -24,6 +24,22 @@ func (s *Service) ensurePlanning(ctx context.Context, job *domain.Job) error {
 		_, failErr := s.failJob(ctx, job, fmt.Sprintf("planner execution failed: %v", err))
 		return failErr
 	}
+
+	// If the job uses adaptive decomposition, adopt the planner's recommendations
+	// before building the sprint contract so the resolved level is used throughout.
+	if job.StrictnessLevel == "auto" {
+		switch plannerOutput.RecommendedStrictness {
+		case "strict", "normal", "lenient":
+			job.StrictnessLevel = plannerOutput.RecommendedStrictness
+		default:
+			// Empty or unrecognised recommendation: fall back to normal.
+			job.StrictnessLevel = "normal"
+		}
+		if plannerOutput.RecommendedMaxSteps > 0 {
+			job.MaxSteps = plannerOutput.RecommendedMaxSteps
+		}
+	}
+
 	planning := buildPlanningArtifact(*job, &plannerOutput)
 	return s.persistPlanning(ctx, job, planning)
 }
@@ -173,6 +189,13 @@ func buildSprintContract(job domain.Job, planning domain.PlanningArtifact) domai
 		thresholdMinSteps = 1
 	case "lenient":
 		required = []string{}
+	case "auto":
+		// "auto" should be resolved in ensurePlanning before reaching here.
+		// If it reaches here (e.g. planner phase skipped), fall back to "normal".
+		level = "normal"
+		required = []string{"implement"}
+		thresholdSuccessCnt = 1
+		thresholdMinSteps = 1
 	}
 
 	return domain.SprintContract{
@@ -190,12 +213,15 @@ func buildSprintContract(job domain.Job, planning domain.PlanningArtifact) domai
 
 // normalizeStrictnessLevel canonicalises the level string and falls back to
 // "normal" for empty or unrecognised values.
+// "auto" is passed through so ensurePlanning can adopt the planner's recommendation.
 func normalizeStrictnessLevel(level string) string {
 	switch strings.TrimSpace(strings.ToLower(level)) {
 	case "strict":
 		return "strict"
 	case "lenient":
 		return "lenient"
+	case "auto":
+		return "auto"
 	default:
 		return "normal"
 	}
@@ -207,6 +233,9 @@ func normalizeContextMode(mode string) string {
 		return "summary"
 	case "minimal":
 		return "minimal"
+	case "auto":
+		// Pass through so the leader payload builder can resolve it at runtime.
+		return "auto"
 	default:
 		return "full"
 	}

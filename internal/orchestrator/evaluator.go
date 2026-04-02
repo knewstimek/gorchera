@@ -193,6 +193,37 @@ func mergeEvaluatorReport(job domain.Job, verification VerificationContract, spr
 			report.Reason = "evaluator blocked completion"
 		}
 	}
+
+	// Apply rubric axis threshold enforcement when axes are defined.
+	// This is additive: existing pass/fail logic runs first; rubric can only
+	// demote a passing report, never promote a failing one.
+	if len(verification.RubricAxes) > 0 && len(providerReport.RubricScores) > 0 {
+		thresholds := make(map[string]float64, len(verification.RubricAxes))
+		for _, axis := range verification.RubricAxes {
+			thresholds[axis.Name] = axis.MinThreshold
+		}
+		scored := make([]domain.RubricScore, 0, len(providerReport.RubricScores))
+		failedAxes := make([]string, 0)
+		for _, rs := range providerReport.RubricScores {
+			threshold, ok := thresholds[rs.Axis]
+			axisPassed := !ok || rs.Score >= threshold
+			scored = append(scored, domain.RubricScore{
+				Axis:   rs.Axis,
+				Score:  rs.Score,
+				Passed: axisPassed,
+			})
+			if !axisPassed {
+				failedAxes = append(failedAxes, fmt.Sprintf("%s (%.2f < %.2f)", rs.Axis, rs.Score, threshold))
+			}
+		}
+		report.RubricScores = scored
+		if len(failedAxes) > 0 {
+			report.Passed = false
+			report.Status = "failed"
+			report.Reason = fmt.Sprintf("rubric axis thresholds not met: %s", strings.Join(failedAxes, ", "))
+		}
+	}
+
 	return report
 }
 
