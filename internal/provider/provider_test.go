@@ -1,9 +1,10 @@
-﻿package provider
+package provider
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,236 @@ func TestSessionManagerRunsPlannerAndEvaluatorPhases(t *testing.T) {
 	}
 	if report.Status != "blocked" {
 		t.Fatalf("expected blocked evaluator report for empty job, got %s", report.Status)
+	}
+}
+
+func TestSessionManagerUsesRoleSpecificProviderOverrides(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	for _, name := range []domain.ProviderName{
+		domain.ProviderName("global-provider"),
+		domain.ProviderName("leader-provider"),
+		domain.ProviderName("planner-provider"),
+		domain.ProviderName("evaluator-provider"),
+		domain.ProviderName("executor-provider"),
+		domain.ProviderName("reviewer-provider"),
+		domain.ProviderName("tester-provider"),
+	} {
+		registry.Register(roleTrackingAdapter{name: name})
+	}
+
+	manager := NewSessionManager(registry)
+
+	cases := []struct {
+		name string
+		job  domain.Job
+		run  func(domain.Job) (string, error)
+		want string
+	}{
+		{
+			name: "leader",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Leader: domain.ExecutionProfile{Provider: domain.ProviderName("leader-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunLeader(context.Background(), job)
+			},
+			want: "leader-provider:leader",
+		},
+		{
+			name: "planner",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Planner: domain.ExecutionProfile{Provider: domain.ProviderName("planner-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunPlanner(context.Background(), job)
+			},
+			want: "planner-provider:planner",
+		},
+		{
+			name: "evaluator",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Evaluator: domain.ExecutionProfile{Provider: domain.ProviderName("evaluator-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunEvaluator(context.Background(), job)
+			},
+			want: "evaluator-provider:evaluator",
+		},
+		{
+			name: "worker executor",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("executor-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "implement"})
+			},
+			want: "executor-provider:worker:implement",
+		},
+		{
+			name: "worker reviewer",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Reviewer: domain.ExecutionProfile{Provider: domain.ProviderName("reviewer-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "review"})
+			},
+			want: "reviewer-provider:worker:review",
+		},
+		{
+			name: "worker tester",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Tester: domain.ExecutionProfile{Provider: domain.ProviderName("tester-provider")},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "test"})
+			},
+			want: "tester-provider:worker:test",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.run(tc.job)
+			if err != nil {
+				t.Fatalf("expected override provider to succeed, got error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestSessionManagerFallsBackToJobProviderWhenRoleProviderEmpty(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(roleTrackingAdapter{name: domain.ProviderName("global-provider")})
+
+	manager := NewSessionManager(registry)
+
+	cases := []struct {
+		name string
+		job  domain.Job
+		run  func(domain.Job) (string, error)
+		want string
+	}{
+		{
+			name: "leader",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Leader: domain.ExecutionProfile{Model: "leader-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunLeader(context.Background(), job)
+			},
+			want: "global-provider:leader",
+		},
+		{
+			name: "planner",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Planner: domain.ExecutionProfile{Model: "planner-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunPlanner(context.Background(), job)
+			},
+			want: "global-provider:planner",
+		},
+		{
+			name: "evaluator",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Evaluator: domain.ExecutionProfile{Model: "evaluator-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunEvaluator(context.Background(), job)
+			},
+			want: "global-provider:evaluator",
+		},
+		{
+			name: "worker executor",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Executor: domain.ExecutionProfile{Model: "executor-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "implement"})
+			},
+			want: "global-provider:worker:implement",
+		},
+		{
+			name: "worker reviewer",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Reviewer: domain.ExecutionProfile{Model: "reviewer-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "review"})
+			},
+			want: "global-provider:worker:review",
+		},
+		{
+			name: "worker tester",
+			job: domain.Job{
+				Provider: domain.ProviderName("global-provider"),
+				RoleProfiles: domain.RoleProfiles{
+					Tester: domain.ExecutionProfile{Model: "tester-model"},
+				},
+			},
+			run: func(job domain.Job) (string, error) {
+				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "test"})
+			},
+			want: "global-provider:worker:test",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.run(tc.job)
+			if err != nil {
+				t.Fatalf("expected global provider fallback to succeed, got error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
 	}
 }
 
@@ -681,6 +912,30 @@ func (a fallbackLeaderAdapter) RunLeader(_ context.Context, _ domain.Job) (strin
 
 func (a fallbackLeaderAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
 	return `{"status":"success","summary":"fallback worker"}`, nil
+}
+
+type roleTrackingAdapter struct {
+	name domain.ProviderName
+}
+
+func (a roleTrackingAdapter) Name() domain.ProviderName {
+	return a.name
+}
+
+func (a roleTrackingAdapter) RunLeader(_ context.Context, _ domain.Job) (string, error) {
+	return fmt.Sprintf("%s:leader", a.name), nil
+}
+
+func (a roleTrackingAdapter) RunWorker(_ context.Context, _ domain.Job, task domain.LeaderOutput) (string, error) {
+	return fmt.Sprintf("%s:worker:%s", a.name, task.TaskType), nil
+}
+
+func (a roleTrackingAdapter) RunPlanner(_ context.Context, _ domain.Job) (string, error) {
+	return fmt.Sprintf("%s:planner", a.name), nil
+}
+
+func (a roleTrackingAdapter) RunEvaluator(_ context.Context, _ domain.Job) (string, error) {
+	return fmt.Sprintf("%s:evaluator", a.name), nil
 }
 
 func newTestCodexAdapter(t *testing.T, capture func(string, []string)) *CodexAdapter {

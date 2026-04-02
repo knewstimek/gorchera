@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"gorchera/internal/domain"
 	"gorchera/internal/orchestrator"
@@ -27,6 +28,11 @@ type Server struct {
 	mu      sync.Mutex
 	writer  io.Writer
 }
+
+var (
+	statusWaitPollInterval = 2 * time.Second
+	statusWaitTimeout      = 5 * time.Minute
+)
 
 func NewServer(service *orchestrator.Service) *Server {
 	return &Server{service: service}
@@ -245,22 +251,24 @@ func toolList() []toolDef {
 		},
 		{
 			Name:        "gorchera_status",
-			Description: "Get the current status of a job.",
+			Description: "Get the current status of a job. Set wait=true to block until a terminal state or the wait timeout.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
 					"job_id": {Type: "string", Description: "Job ID"},
+					"wait":   {Type: "boolean", Description: "When true, wait for the job to reach a terminal state before returning", Default: false},
 				},
 				Required: []string{"job_id"},
 			},
 		},
 		{
 			Name:        "gorchera_chain_status",
-			Description: "Get the current status of a sequential job chain.",
+			Description: "Get the current status of a sequential job chain. Set wait=true to block until a terminal state or the wait timeout.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
 					"chain_id": {Type: "string", Description: "Chain ID"},
+					"wait":     {Type: "boolean", Description: "When true, wait for the chain to reach a terminal state before returning", Default: false},
 				},
 				Required: []string{"chain_id"},
 			},
@@ -567,7 +575,8 @@ func (s *Server) toolStatus(ctx context.Context, args map[string]any) (toolResul
 	if err != nil {
 		return toolResult{}, err
 	}
-	job, err := s.service.Get(ctx, jobID)
+	wait := boolArgDefault(args, "wait", false)
+	job, err := s.getJobStatus(ctx, jobID, wait)
 	if err != nil {
 		return toolResult{}, err
 	}
@@ -579,11 +588,108 @@ func (s *Server) toolChainStatus(ctx context.Context, args map[string]any) (tool
 	if err != nil {
 		return toolResult{}, err
 	}
-	chain, err := s.service.GetChain(ctx, chainID)
+	wait := boolArgDefault(args, "wait", false)
+	chain, err := s.getChainStatus(ctx, chainID, wait)
 	if err != nil {
 		return toolResult{}, err
 	}
 	return jsonResult(chain)
+}
+
+func (s *Server) getJobStatus(ctx context.Context, jobID string, wait bool) (*domain.Job, error) {
+	if !wait {
+		return s.service.Get(ctx, jobID)
+	}
+
+	var (
+		job     *domain.Job
+		lastErr error
+	)
+	timer := time.NewTimer(statusWaitTimeout)
+	ticker := time.NewTicker(statusWaitPollInterval)
+	defer timer.Stop()
+	defer ticker.Stop()
+
+	for {
+		current, err := s.service.Get(ctx, jobID)
+		if err == nil {
+			job = current
+			lastErr = nil
+			if isTerminalJobStatus(job.Status) {
+				return job, nil
+			}
+		} else {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			if job != nil {
+				return job, nil
+			}
+			return nil, lastErr
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) getChainStatus(ctx context.Context, chainID string, wait bool) (*domain.JobChain, error) {
+	if !wait {
+		return s.service.GetChain(ctx, chainID)
+	}
+
+	var (
+		chain   *domain.JobChain
+		lastErr error
+	)
+	timer := time.NewTimer(statusWaitTimeout)
+	ticker := time.NewTicker(statusWaitPollInterval)
+	defer timer.Stop()
+	defer ticker.Stop()
+
+	for {
+		current, err := s.service.GetChain(ctx, chainID)
+		if err == nil {
+			chain = current
+			lastErr = nil
+			if isTerminalChainStatus(chain.Status) {
+				return chain, nil
+			}
+		} else {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			if chain != nil {
+				return chain, nil
+			}
+			return nil, lastErr
+		case <-ticker.C:
+		}
+	}
+}
+
+func isTerminalJobStatus(status domain.JobStatus) bool {
+	switch string(status) {
+	case string(domain.JobStatusDone), string(domain.JobStatusFailed), string(domain.JobStatusBlocked), "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalChainStatus(status string) bool {
+	switch status {
+	case domain.ChainStatusDone, domain.ChainStatusFailed, domain.ChainStatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) toolPauseChain(ctx context.Context, args map[string]any) (toolResult, error) {
@@ -824,6 +930,14 @@ func intArgDefault(args map[string]any, key string, def int) int {
 		return v
 	}
 	return def
+}
+
+func boolArgDefault(args map[string]any, key string, def bool) bool {
+	v, ok := args[key].(bool)
+	if !ok {
+		return def
+	}
+	return v
 }
 
 func (s *Server) toolSteer(ctx context.Context, args map[string]any) (toolResult, error) {

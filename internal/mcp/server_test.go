@@ -160,6 +160,236 @@ func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	waitForChainStatus(t, service, started.ChainID, "done")
 }
 
+func TestStatusToolsExposeOptionalWaitSchema(t *testing.T) {
+	tools := toolList()
+
+	assertWaitSchema := func(name string) {
+		t.Helper()
+
+		for _, tool := range tools {
+			if tool.Name != name {
+				continue
+			}
+			prop, ok := tool.InputSchema.Properties["wait"]
+			if !ok {
+				t.Fatalf("%s schema missing wait property", name)
+			}
+			if prop.Type != "boolean" {
+				t.Fatalf("%s wait property type = %q, want boolean", name, prop.Type)
+			}
+			for _, required := range tool.InputSchema.Required {
+				if required == "wait" {
+					t.Fatalf("%s wait property must be optional", name)
+				}
+			}
+			return
+		}
+		t.Fatalf("tool %s not found", name)
+	}
+
+	assertWaitSchema("gorchera_status")
+	assertWaitSchema("gorchera_chain_status")
+}
+
+func TestToolStatusWaitFalseReturnsImmediately(t *testing.T) {
+	control := newMCPWaitProvider("mcp-wait-false")
+	server, service, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	job := startMCPJob(t, server, workspace, string(control.name))
+	t.Cleanup(func() {
+		cancelJobForCleanup(t, service, job.ID)
+	})
+
+	start := time.Now()
+	result, err := server.toolStatus(context.Background(), map[string]any{
+		"job_id": job.ID,
+		"wait":   false,
+	})
+	if err != nil {
+		t.Fatalf("toolStatus returned error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("toolStatus wait=false took too long: %v", elapsed)
+	}
+
+	var current domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &current); err != nil {
+		t.Fatalf("failed to decode job status: %v", err)
+	}
+	if isTerminalJobStatus(current.Status) {
+		t.Fatalf("expected immediate non-terminal snapshot, got %s", current.Status)
+	}
+}
+
+func TestToolStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
+	setStatusWaitTimings(t, 20*time.Millisecond, time.Second)
+
+	control := newMCPWaitProvider("mcp-wait-done")
+	server, _, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	job := startMCPJob(t, server, workspace, string(control.name))
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		control.releaseNow()
+	}()
+
+	result, err := server.toolStatus(context.Background(), map[string]any{
+		"job_id": job.ID,
+		"wait":   true,
+	})
+	if err != nil {
+		t.Fatalf("toolStatus returned error: %v", err)
+	}
+
+	var current domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &current); err != nil {
+		t.Fatalf("failed to decode job status: %v", err)
+	}
+	if current.Status != domain.JobStatusDone {
+		t.Fatalf("expected done status, got %s", current.Status)
+	}
+}
+
+func TestToolStatusWaitReturnsBlockedForOperatorCancellation(t *testing.T) {
+	setStatusWaitTimings(t, 20*time.Millisecond, time.Second)
+
+	control := newMCPWaitProvider("mcp-wait-cancel")
+	server, service, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	job := startMCPJob(t, server, workspace, string(control.name))
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = service.Cancel(context.Background(), job.ID, "operator stop")
+	}()
+
+	result, err := server.toolStatus(context.Background(), map[string]any{
+		"job_id": job.ID,
+		"wait":   true,
+	})
+	if err != nil {
+		t.Fatalf("toolStatus returned error: %v", err)
+	}
+
+	var current domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &current); err != nil {
+		t.Fatalf("failed to decode job status: %v", err)
+	}
+	if current.Status != domain.JobStatusBlocked {
+		t.Fatalf("expected blocked status for operator cancellation, got %s", current.Status)
+	}
+	if !strings.Contains(strings.ToLower(current.BlockedReason), "cancelled by operator") {
+		t.Fatalf("expected operator cancellation reason, got %q", current.BlockedReason)
+	}
+}
+
+func TestToolStatusWaitTimeoutReturnsLatestSnapshot(t *testing.T) {
+	setStatusWaitTimings(t, 20*time.Millisecond, 120*time.Millisecond)
+
+	control := newMCPWaitProvider("mcp-wait-timeout")
+	server, service, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	job := startMCPJob(t, server, workspace, string(control.name))
+	t.Cleanup(func() {
+		cancelJobForCleanup(t, service, job.ID)
+	})
+
+	start := time.Now()
+	result, err := server.toolStatus(context.Background(), map[string]any{
+		"job_id": job.ID,
+		"wait":   true,
+	})
+	if err != nil {
+		t.Fatalf("toolStatus returned error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("toolStatus wait timeout returned too quickly: %v", elapsed)
+	}
+
+	var current domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &current); err != nil {
+		t.Fatalf("failed to decode job status: %v", err)
+	}
+	if isTerminalJobStatus(current.Status) {
+		t.Fatalf("expected non-terminal snapshot after timeout, got %s", current.Status)
+	}
+}
+
+func TestToolChainStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
+	setStatusWaitTimings(t, 20*time.Millisecond, time.Second)
+
+	control := &mcpChainProvider{
+		name:    domain.ProviderName("mcp-chain-wait"),
+		release: make(chan struct{}),
+	}
+	server, _, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	chainID := startMCPChain(t, server, workspace, string(control.name))
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(control.release)
+	}()
+
+	result, err := server.toolChainStatus(context.Background(), map[string]any{
+		"chain_id": chainID,
+		"wait":     true,
+	})
+	if err != nil {
+		t.Fatalf("toolChainStatus returned error: %v", err)
+	}
+
+	var chain domain.JobChain
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &chain); err != nil {
+		t.Fatalf("failed to decode chain status: %v", err)
+	}
+	if chain.Status != domain.ChainStatusDone {
+		t.Fatalf("expected done chain status, got %s", chain.Status)
+	}
+}
+
+func TestToolChainStatusWaitTimeoutReturnsLatestSnapshot(t *testing.T) {
+	setStatusWaitTimings(t, 20*time.Millisecond, 120*time.Millisecond)
+
+	control := &mcpChainProvider{
+		name:    domain.ProviderName("mcp-chain-timeout"),
+		release: make(chan struct{}),
+	}
+	server, service, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	chainID := startMCPChain(t, server, workspace, string(control.name))
+	t.Cleanup(func() {
+		cancelChainForCleanup(t, service, chainID)
+	})
+
+	start := time.Now()
+	result, err := server.toolChainStatus(context.Background(), map[string]any{
+		"chain_id": chainID,
+		"wait":     true,
+	})
+	if err != nil {
+		t.Fatalf("toolChainStatus returned error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("toolChainStatus wait timeout returned too quickly: %v", elapsed)
+	}
+
+	var chain domain.JobChain
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &chain); err != nil {
+		t.Fatalf("failed to decode chain status: %v", err)
+	}
+	if isTerminalChainStatus(chain.Status) {
+		t.Fatalf("expected non-terminal chain snapshot after timeout, got %s", chain.Status)
+	}
+}
+
 func TestToolStartJobRejectsRelativeWorkspaceBeforeExecution(t *testing.T) {
 	t.Parallel()
 
@@ -216,6 +446,77 @@ func newTestServer(t *testing.T, adapters ...provider.Adapter) (*Server, *orches
 	return NewServer(service), service, root
 }
 
+func setStatusWaitTimings(t *testing.T, poll, timeout time.Duration) {
+	t.Helper()
+
+	oldPoll := statusWaitPollInterval
+	oldTimeout := statusWaitTimeout
+	statusWaitPollInterval = poll
+	statusWaitTimeout = timeout
+	t.Cleanup(func() {
+		statusWaitPollInterval = oldPoll
+		statusWaitTimeout = oldTimeout
+	})
+}
+
+func startMCPJob(t *testing.T, server *Server, workspace, providerName string) domain.Job {
+	t.Helper()
+
+	result, err := server.toolStartJob(context.Background(), map[string]any{
+		"goal":             "wait-aware MCP status test",
+		"provider":         providerName,
+		"workspace_dir":    workspace,
+		"strictness_level": "lenient",
+	})
+	if err != nil {
+		t.Fatalf("toolStartJob returned error: %v", err)
+	}
+
+	var job domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &job); err != nil {
+		t.Fatalf("failed to decode job result: %v", err)
+	}
+	return job
+}
+
+func startMCPChain(t *testing.T, server *Server, workspace, providerName string) string {
+	t.Helper()
+
+	result, err := server.toolStartChain(context.Background(), map[string]any{
+		"workspace_dir": workspace,
+		"goals": []any{
+			map[string]any{
+				"goal":             "hold first",
+				"provider":         providerName,
+				"strictness_level": "lenient",
+				"context_mode":     "full",
+				"max_steps":        4,
+			},
+			map[string]any{
+				"goal":             "finish second",
+				"provider":         providerName,
+				"strictness_level": "lenient",
+				"context_mode":     "full",
+				"max_steps":        4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("toolStartChain returned error: %v", err)
+	}
+
+	var started struct {
+		ChainID string `json:"chain_id"`
+	}
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &started); err != nil {
+		t.Fatalf("failed to decode chain start result: %v", err)
+	}
+	if started.ChainID == "" {
+		t.Fatal("expected non-empty chain id")
+	}
+	return started.ChainID
+}
+
 type quickAsyncProvider struct{}
 
 func (quickAsyncProvider) Name() domain.ProviderName {
@@ -228,6 +529,47 @@ func (quickAsyncProvider) RunLeader(_ context.Context, _ domain.Job) (string, er
 
 func (quickAsyncProvider) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
 	return `{"status":"success","summary":"quick async worker completed","artifacts":["worker-output.json"]}`, nil
+}
+
+type mcpWaitProvider struct {
+	name    domain.ProviderName
+	release chan struct{}
+}
+
+func newMCPWaitProvider(name string) *mcpWaitProvider {
+	return &mcpWaitProvider{
+		name:    domain.ProviderName(name),
+		release: make(chan struct{}),
+	}
+}
+
+func (p *mcpWaitProvider) Name() domain.ProviderName {
+	return p.name
+}
+
+func (p *mcpWaitProvider) RunLeader(ctx context.Context, _ domain.Job) (string, error) {
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return `{"action":"complete","target":"none","task_type":"none","reason":"wait provider complete"}`, nil
+}
+
+func (p *mcpWaitProvider) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
+	return `{"status":"success","summary":"unused","artifacts":[]}`, nil
+}
+
+func (p *mcpWaitProvider) RunEvaluator(_ context.Context, _ domain.Job) (string, error) {
+	return `{"status":"passed","passed":true,"score":100,"reason":"accepted","missing_step_types":[],"evidence":["wait"],"contract_ref":"","verification_report":{"status":"passed","passed":true,"reason":"accepted","evidence":["wait"],"missing_checks":[],"artifacts":[],"contract_ref":""}}`, nil
+}
+
+func (p *mcpWaitProvider) releaseNow() {
+	select {
+	case <-p.release:
+	default:
+		close(p.release)
+	}
 }
 
 func mustToolCallRequest(t *testing.T, name string, args map[string]any) jsonRPCRequest {
@@ -298,6 +640,46 @@ func waitForChainStatus(t *testing.T, service *orchestrator.Service, chainID str
 	}
 }
 
+func cancelJobForCleanup(t *testing.T, service *orchestrator.Service, jobID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, err := service.Cancel(context.Background(), jobID, "cleanup")
+		if err == nil && isTerminalJobStatus(job.Status) {
+			time.Sleep(50 * time.Millisecond)
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("failed to cancel job %s during cleanup: %v", jobID, err)
+			}
+			t.Fatalf("job %s did not reach a terminal state during cleanup", jobID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func cancelChainForCleanup(t *testing.T, service *orchestrator.Service, chainID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		chain, err := service.CancelChain(context.Background(), chainID, "cleanup")
+		if err == nil && isTerminalChainStatus(chain.Status) {
+			time.Sleep(50 * time.Millisecond)
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("failed to cancel chain %s during cleanup: %v", chainID, err)
+			}
+			t.Fatalf("chain %s did not reach a terminal state during cleanup", chainID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 type mcpChainProvider struct {
 	name    domain.ProviderName
 	release chan struct{}
@@ -307,9 +689,13 @@ func (p *mcpChainProvider) Name() domain.ProviderName {
 	return p.name
 }
 
-func (p *mcpChainProvider) RunLeader(_ context.Context, job domain.Job) (string, error) {
+func (p *mcpChainProvider) RunLeader(ctx context.Context, job domain.Job) (string, error) {
 	if strings.Contains(job.Goal, "hold") {
-		<-p.release
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	return `{"action":"complete","target":"none","task_type":"none","reason":"chain goal complete"}`, nil
 }

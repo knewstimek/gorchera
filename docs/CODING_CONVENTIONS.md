@@ -1,142 +1,153 @@
 # Gorchera Coding Conventions
 
-## Build & Test
+## Build And Test
 
 ```bash
 go build ./...
 go test ./...
 ```
 
-Go 1.26, no external dependencies (pure stdlib).
-
 ## Go Style
 
-- Tab indentation (gofmt standard)
-- Error: return immediately, no nesting
-- Variable names: Go idiomatic camelCase
-- JSON fields: snake_case
-- No unnecessary comments -- express intent through code
+- Use `gofmt` output without local deviation.
+- Return errors early; avoid unnecessary nesting.
+- Keep domain JSON fields in `snake_case`.
+- Prefer small, explicit helpers over hidden cross-package magic.
+- Comments should explain a non-obvious rule, not restate the code.
 
-## Type Rules
+## Domain Type Rules
 
-- ALL domain types live in `internal/domain/types.go`
-- New domain types -> add to types.go, never declare in other packages
-- Exception: package-internal types (e.g., `orchestrator.VerificationContract` in verification.go)
-- Helper utility functions like `firstNonEmpty()` exist as package-private in both `planning.go` and `protocol.go` -- reuse from the same package, don't create a third copy
+- All cross-package domain types live in `internal/domain/types.go`.
+- Add new job, step, chain, profile, or contract fields there first.
+- Keep package-internal transport or helper structs local to their package.
+- If a new status is added, also add the corresponding validation helper in `types.go`.
 
-## State Management Pattern
+## State Persistence Pattern
 
-The intended pattern for every job state change:
+For any job or chain mutation:
 
 ```go
-job.Status = domain.JobStatusXxx
-job.SomeField = value
-s.addEvent(job, "event_kind", "human-readable message")
-s.touch(job)    // sets UpdatedAt
+entity.Field = value
+s.addEvent(job, "event_kind", "message") // job only
+s.touch(job)                             // or s.touchChain(chain)
 if err := s.state.SaveJob(ctx, job); err != nil {
     return nil, err
 }
 ```
 
-NOTE: Not all existing code follows this exactly. Some paths call SaveJob after adding events inside a switch. The pattern above is the target -- follow it for new code and don't break existing patterns.
+Guidelines:
+- Persist before starting asynchronous follow-up work.
+- Do not update chain state only in memory and then launch the next goal.
+- When a mutation changes terminal semantics, update both the in-memory struct and the persisted record before returning.
 
 ## Provider Adapter Rules
 
-Three interfaces to implement:
-- `provider.Adapter`: Name(), RunLeader(ctx, job), RunWorker(ctx, job, task)
-- `provider.PlannerRunner`: RunPlanner(ctx, job)
-- `provider.EvaluatorRunner`: RunEvaluator(ctx, job)
+Interfaces:
+- `Adapter`: `RunLeader`, `RunWorker`
+- `PlannerRunner`: `RunPlanner`
+- `EvaluatorRunner`: `RunEvaluator`
 
-Registration: add to `NewRegistry()` in provider.go (lines 36-38).
-Prompts: use `build*Prompt()` functions in protocol.go.
-Schemas: use `*Schema()` functions in protocol.go.
+Registration:
+- Register adapters in `provider.NewRegistry()`.
 
-All Run* methods return (string, error) where string is raw JSON.
-Orchestrator handles unmarshal + validation.
-Rough token/cost accounting stays in orchestrator code. Keep adapters billing-agnostic and do not add provider-specific pricing logic.
+Selection:
+- Provider resolution is role-specific.
+- Use `SessionManager.resolveProfile()` / `resolveAdapter()` instead of re-implementing fallback logic.
+- `fallback_provider` is resolved in `adapterForProfile()`.
 
-## Schema Validation
+Model handling:
+- Claude consumes the selected model directly.
+- Codex should only emit `--model` for Codex/GPT-family values.
+- Do not silently treat Claude shorthand model names as valid Codex model flags.
 
-- schema/validate.go contains all validation functions
-- ValidateLeaderOutput: checks action, target, task_type, required fields per action
-- ValidateWorkerOutput: checks status, summary, blocked_reason/error_reason when required
-- ValidateVerificationContract: checks version, goal, scope, required_checks, required_commands
+Error handling:
+- New provider transport/classification work belongs in `internal/provider/errors.go` and `internal/provider/command.go`.
+- When adding a new provider error kind, also decide its `RecommendedAction`.
 
-When adding a new leader action or worker status:
-1. Add to the allowlist maps at the top of validate.go (leaderActions, workerStatuses, etc.)
-2. Add validation rules in the corresponding Validate* function
-3. Add handling in service.go's runLoop switch
+## Prompt And Schema Rules
 
-## Artifact Materialization
+- Update prompt builders in `internal/provider/protocol.go`.
+- Update schema validation in `internal/schema/validate.go`.
+- Every new leader action or worker status needs both:
+  - schema validation
+  - orchestrator handling in `runLoop()` or worker execution paths
 
-- `artifacts.MaterializeWorkerArtifacts(jobID, stepIndex, workerOutput)` -> paths
-- `artifacts.MaterializeSystemResult(jobID, stepIndex, runtimeResult)` -> paths
-- `artifacts.MaterializeTextArtifact(jobID, name, content)` -> path
-- `artifacts.MaterializeJSONArtifact(jobID, name, value)` -> path
+Leader context:
+- `ContextMode` must stay normalized to `full`, `summary`, or `minimal`.
+- Supervisor directives must remain a separate prompt section, not duplicated inside serialized job payloads.
 
-All files stored under `.gorchera/{jobID}/`.
-Filenames sanitized via sanitizeArtifactName() -- replaces special chars with `-`.
-Worker artifact files are named `step-{NN}-{sanitized_name}`.
+## Verification Contract Rules
 
-## Event Naming
+- Planning generates the persisted verification contract.
+- Test tasks should be decorated with verification-contract context through `decorateTaskForVerification()`.
+- Do not bypass evaluator gating by writing `done` directly.
+- If you change completion semantics, update:
+  - `planning.go`
+  - `verification.go`
+  - `evaluator.go`
+  - docs
 
-Events use `noun_verb` or `noun_adjective` pattern:
-- job_created, job_resumed, job_cancelled, job_approved, job_rejected
-- job_retry_requested, job_planned, job_completed, job_blocked, job_failed
-- leader_requested, leader_summary
-- worker_requested, worker_succeeded, worker_blocked, worker_failed
-- system_requested, system_succeeded, system_blocked, system_failed
-- parallel_workers_requested, parallel_workers_succeeded/blocked/failed
-- evaluation_passed, evaluation_blocked, evaluation_failed
+## Artifact Rules
 
-## Adding a New CLI Command
+- Keep artifact writes atomic through `ArtifactStore`.
+- Worker artifacts should prefer `FileContents` when available.
+- System artifacts should store the full runtime result JSON.
+- `Step.DiffSummary` is reserved for workspace diff visibility; do not overload it with arbitrary notes.
 
-main.go pattern:
-```go
-case "mycommand":
-    fs := flag.NewFlagSet("mycommand", flag.ExitOnError)
-    someFlag := fs.String("flag", "default", "description")
-    fs.Parse(os.Args[2:])
-    // implementation
-```
+## Runtime And Approval Rules
 
-## Adding a New HTTP Route
+- Add new system task types in `mapSystemTask()` and in runtime/policy allowlists together.
+- Approval policy is category- and scope-based. Do not special-case risky behavior in a provider adapter.
+- Workspace-relative command directories must continue to flow through `resolveSystemWorkdir()`.
 
-server.go uses ServeMux prefix matching. Job sub-routes are parsed manually inside `handleJob()`.
+## Chain Extension Guide
 
-To add `/jobs/{id}/newroute`:
-1. Add a case in the path switch inside `handleJob` (server.go)
-2. Create handler method on `*Server`
+When extending the chain system, make changes in this order.
 
-To add a top-level route:
-1. Add `mux.HandleFunc("/newroute", s.handleNewRoute)` in `Handler()` method
+1. Domain model:
+   - Add statuses or fields in `internal/domain/types.go`.
+   - Update `ValidChainStatus` / `ValidChainGoalStatus` as needed.
 
-## Adding a New System Task Type
+2. Persistence:
+   - Confirm the new fields round-trip through `StateStore` JSON save/load.
+   - Add store tests if the extension changes persisted semantics.
 
-To support a new taskType for `run_system`:
-1. Add mapping in `mapSystemTask()` (service.go:737-749)
-2. Add command allowlist in `NewDefaultPolicy()` (runtime/policy.go:14-24)
-3. Current supported types: build, test, lint, search only
+3. Orchestrator lifecycle:
+   - Update `StartChain`, `startChainGoal`, `advanceChain`, `handleChainCompletion`, `handleChainTerminalState`, and any operator control methods that the new behavior affects.
+   - Preserve the invariant that only orchestrator-owned code starts the next chain goal.
+   - Preserve evaluator-gated completion. A chain goal is not `done` until the underlying job is evaluator-approved `done`.
+
+4. Control-plane surface:
+   - Add MCP tools in `internal/mcp/server.go` only if the behavior is intentionally exposed.
+   - Do not document or expose chain operations through CLI or HTTP unless they are actually wired.
+   - If wait semantics are needed, follow the existing MCP polling pattern instead of inventing a second status mechanism.
+
+5. Cancellation/pausing semantics:
+   - Pausing must stop advancement, not force-kill the active goal.
+   - Cancelling or skipping an active goal must go through `interruptChainGoalJob()` so the job state is persisted consistently.
+   - New terminal chain statuses must short-circuit `advanceChain()`.
+
+6. Tests:
+   - Add service tests for lifecycle behavior.
+   - Add MCP tests if a new MCP tool or response path is added.
+   - Add domain/status validation tests when new statuses are introduced.
+
+7. Documentation:
+   - Update `docs/ARCHITECTURE.md` for lifecycle semantics and control surfaces.
+   - Update `docs/IMPLEMENTATION_STATUS.md` for newly available behavior.
+   - Update `docs/PRINCIPLES.md` if the change affects non-bypassable invariants.
 
 ## Test Style
 
-- Test files: `*_test.go` in the same package
-- Patterns: table-driven or single-function
-- Mock provider enables end-to-end loop testing without real AI providers
-- Test helpers: use Go test helper patterns (t.Helper())
-- `service_test.go`: tests for orchestrator loop, approval, retry, cancel, parallel, harness
-- `server_test.go`: tests for HTTP API handlers
+- Prefer focused table-driven tests for validation and routing.
+- Use end-to-end mock-provider tests for orchestrator loop behavior.
+- When changing provider routing, cover leader, planner, evaluator, executor, reviewer, and tester paths explicitly.
+- When changing chain behavior, cover both happy-path advancement and terminal interruption cases.
 
 ## Documentation Rules
 
-When changing code, update:
-- `docs/IMPLEMENTATION_STATUS.md` -- if fixing a bug, remove from Known Bugs
-- `docs/ARCHITECTURE.md` -- if changing package structure, state machine, or API routes
-- `ORCHESTRATOR_SPEC_UPDATED.md` -- if changing spec-level behavior
-
-Must update docs when changing:
-- CLI commands / HTTP routes
-- State machine transitions
-- Approval semantics
-- Harness lifecycle
-- Provider adapter interface
+When code changes:
+- Update architecture docs for lifecycle, control surface, or package-boundary changes.
+- Update implementation-status docs for newly implemented or still-missing behavior.
+- Update principles docs when a new invariant or non-bypassable operator rule is introduced.
+- Do not document spec-only behavior as implemented unless the current code path exists.

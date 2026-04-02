@@ -92,8 +92,7 @@ func (m *SessionManager) RunEvaluator(ctx context.Context, job domain.Job) (stri
 }
 
 func (m *SessionManager) runRole(ctx context.Context, job domain.Job, role domain.RoleName, invoke func(Adapter) (string, error)) (string, error) {
-	profile := m.resolveProfile(job, role)
-	adapter, err := m.adapterForProfile(profile)
+	adapter, err := m.resolveAdapter(job, role)
 	if err != nil {
 		return "", err
 	}
@@ -101,16 +100,19 @@ func (m *SessionManager) runRole(ctx context.Context, job domain.Job, role domai
 }
 
 func (m *SessionManager) runPhase(ctx context.Context, job domain.Job, role domain.RoleName, invoke func(Adapter) (string, error)) (string, error) {
-	profile := m.resolveProfile(job, role)
-	adapter, err := m.adapterForProfile(profile)
+	adapter, err := m.resolveAdapter(job, role)
 	if err != nil {
 		return "", err
 	}
 	return invoke(adapter)
 }
 
+func (m *SessionManager) resolveAdapter(job domain.Job, role domain.RoleName) (Adapter, error) {
+	return m.adapterForProfile(m.resolveProfile(job, role))
+}
+
 func (m *SessionManager) resolveProfile(job domain.Job, role domain.RoleName) domain.ExecutionProfile {
-	profile := job.RoleProfiles.ProfileFor(role, job.Provider)
+	profile := job.RoleProfiles.ProfileFor(role, "")
 	if profile.Provider == "" {
 		profile.Provider = job.Provider
 	}
