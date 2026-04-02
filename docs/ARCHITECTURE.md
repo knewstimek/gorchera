@@ -168,6 +168,7 @@ Leader prompt behavior:
 - The directive is inserted before current job state with explicit highest-priority instructions
 - After a successful leader provider call, `runLoop()` clears `job.SupervisorDirective`
 - The directive does not bypass evaluator gates, approval checks, harness ownership rules, or chain controls
+- The leader prompt now includes a conditional high-risk review trigger: lifecycle/restart/retry/recovery/concurrency/deduplication/external-pricing/auth/UI-event-boundary changes should dispatch an explicit review step before `complete`
 
 ## Role Profiles And Model Selection
 
@@ -330,6 +331,7 @@ Enforcement in `mergeEvaluatorReport()` (evaluator.go):
 
 Evaluator prompt:
 - When rubric axes are present in the verification contract, the evaluator prompt includes a `RUBRIC SCORING` section.
+- The evaluator prompt is gate-oriented: it must assess acceptance criteria, verification evidence, and unresolved contradictions in job steps rather than passing solely because one implementation step succeeded.
 - The evaluator must score each axis on a 0.0-1.0 scale with one-sentence reasoning per axis.
 
 ## Adaptive Decomposition (strictness=auto)
@@ -370,3 +372,8 @@ Codebase analysis instruction:
 
 Measurable acceptance criteria:
 - The planner prompt requires acceptance criteria to be verifiable (e.g. `go test ./... exits 0`), not vague (e.g. "code is clean").
+
+Worker prompt behavior:
+- Executor prompts stay implementation-focused.
+- Reviewer prompts are adversarial: they search for counterexamples, contract violations, regressions, lifecycle/retry/recovery/idempotency issues, and state-transition problems.
+- Tester prompts are verification-focused: they prefer executable evidence and treat missing or contradictory evidence as failure unless the block is genuinely external.

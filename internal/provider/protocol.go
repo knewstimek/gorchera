@@ -267,19 +267,21 @@ TASK: You are an evaluator component operating under an orchestrator supervisor.
 The job data below is complete. Evaluate it now -- do not ask for more input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 
-CRITICAL STATUS DECISION:
-Look at the "steps" array in job state. Then pick ONE status:
-- "passed" + passed=true: use this when an implement step with status "succeeded" covers the job goal
-- "failed" + passed=false: use this when steps are missing, failed, or blocked
-- "blocked" + passed=false: ONLY use this when you literally cannot see the steps data
+EVALUATION ROLE:
+- You are a release gate, not a cheerleader.
+- Do NOT pass the job merely because one implement step succeeded.
+- Base your decision on acceptance criteria, verification contract evidence, step outcomes, and whether the goal is actually satisfied.
 
 Job goal: %s
 
 EVALUATION PROCEDURE:
-1. Find any step with status="succeeded" that relates to the goal
-2. If found: output status="passed", passed=true, score=90+
-3. If not found: output status="failed", passed=false
-4. Do NOT use "blocked" if you can read the steps array
+1. Inspect the verification contract, job summary, leader context, and full steps array.
+2. Confirm whether the required evidence exists and whether the completed steps actually satisfy the goal.
+3. Treat failed or blocked execution evidence as a gate failure unless the evidence clearly shows the issue is unrelated to the requested outcome.
+4. Use status="passed" only when the contract is satisfied, the goal is achieved, and there is no material unresolved contradiction in the evidence.
+5. Use status="failed" when the evidence shows missing coverage, unmet acceptance criteria, regressions, or unresolved failed/blocked work.
+6. Use status="blocked" only when the available evidence is genuinely insufficient or ambiguous even after reading the job state.
+7. Prefer concrete missing_step_types and evidence over vague reasons.
 %s
 Current job state:
 %s
@@ -311,6 +313,7 @@ func buildLeaderPrompt(job domain.Job) string {
 		`- Use action="complete" only when the sprint contract is satisfied and the goal is fully achieved.`,
 		`- If required step coverage is missing, dispatch the missing work instead of choosing complete.`,
 		`- Do NOT use summarize as a substitute for complete. Summarize is only for recording intermediate progress between worker dispatches. If all required work is done and verified, choose complete immediately. Do not summarize more than once consecutively.`,
+		`- If the change touches lifecycle, restart, retry, recovery, concurrency, deduplication, external pricing/config, authentication boundaries, or UI/event-delivery boundaries, dispatch an explicit review step that hunts for regressions and counterexamples before choosing complete.`,
 	}
 	if strings.EqualFold(strictnessLevel, "strict") {
 		// Strict mode uses the sprint contract as a gate, so the leader must
@@ -521,6 +524,62 @@ func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
 		if data, err := json.MarshalIndent(job.VerificationContract, "", "  "); err == nil {
 			contractPayload = string(data)
 		}
+	}
+	// Worker prompts are role-specific even though they share one transport.
+	// This keeps the planner broad while making reviewer/tester behavior
+	// explicit and testable instead of relying on task_text phrasing alone.
+	switch domain.RoleForTaskType(task.TaskType) {
+	case domain.RoleReviewer:
+		return strings.TrimSpace(fmt.Sprintf(`
+TASK: You are a reviewer component assigned by the leader. You are not the primary implementer for this step. Your job is to challenge the proposed change, look for counterexamples, and surface concrete risks before the job is allowed to complete.
+The assigned review task below is complete and ready to execute. Do it now -- do not ask for input.
+Output only a JSON object matching the schema. No conversation, no preamble.
+status MUST be one of: success, failed, blocked.
+
+Overall job goal: %s
+
+Assigned review task:
+%s
+
+Review procedure:
+- Assume the change may be wrong until you can justify that it is safe.
+- Check input/output contracts, invariants, edge cases, and whether the task actually satisfies the goal.
+- Explicitly look for lifecycle, restart, retry, recovery, idempotency, duplicate-execution, and state-transition issues when relevant.
+- Look for missing validation, hidden regressions, and contradictions between artifacts, summaries, and actual code.
+- Report success only when you cannot find a material defect in the reviewed scope.
+- Report failed when you find a concrete bug, regression, unsafe assumption, or missing required evidence.
+- Report blocked only when the evidence needed for a real review is missing.
+
+Job state:
+%s
+
+Verification contract:
+%s
+`, job.Goal, string(taskPayload), string(jobPayload), contractPayload))
+	case domain.RoleTester:
+		return strings.TrimSpace(fmt.Sprintf(`
+TASK: You are a tester component assigned by the leader. Your job is to verify behavior, challenge assumptions with runnable checks, and report whether the requested outcome is actually demonstrated.
+The assigned test task below is complete and ready to execute. Do it now -- do not ask for input.
+Output only a JSON object matching the schema. No conversation, no preamble.
+status MUST be one of: success, failed, blocked.
+
+Overall job goal: %s
+
+Assigned test task:
+%s
+
+Testing procedure:
+- Prefer executable verification, observable evidence, and concrete failure reproduction.
+- Check that acceptance criteria and verification contract requirements are actually met.
+- Treat missing evidence, flaky outcomes, and inconsistent results as failures unless the missing dependency is truly external.
+- Report blocked only when the requested verification cannot proceed because required evidence or environment access is unavailable.
+
+Job state:
+%s
+
+Verification contract:
+%s
+`, job.Goal, string(taskPayload), string(jobPayload), contractPayload))
 	}
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are an executor worker assigned by the leader. You perform the implementation task described below. Report results accurately including files changed, commands run, and any errors encountered.

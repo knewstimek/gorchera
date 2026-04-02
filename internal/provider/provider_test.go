@@ -974,6 +974,9 @@ func TestPlannerAndEvaluatorPromptsIncludeVerificationContract(t *testing.T) {
 	if !strings.Contains(evaluatorPrompt, "Verification contract") {
 		t.Fatal("expected evaluator prompt to include verification contract payload")
 	}
+	if !strings.Contains(evaluatorPrompt, "Do NOT pass the job merely because one implement step succeeded.") {
+		t.Fatal("expected evaluator prompt to enforce gate-based completion")
+	}
 	workerPrompt := buildWorkerPrompt(job, domain.LeaderOutput{
 		Action:   "run_worker",
 		Target:   "D",
@@ -982,6 +985,30 @@ func TestPlannerAndEvaluatorPromptsIncludeVerificationContract(t *testing.T) {
 	})
 	if !strings.Contains(workerPrompt, "verification contract") {
 		t.Fatal("expected worker prompt to include verification contract payload")
+	}
+}
+
+func TestReviewerPromptUsesAdversarialGuidance(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildWorkerPrompt(domain.Job{
+		Goal:     "Harden restart safety",
+		Provider: domain.ProviderMock,
+	}, domain.LeaderOutput{
+		Action:   "run_worker",
+		Target:   "C",
+		TaskType: "review",
+		TaskText: "Review the recovery patch for regressions",
+	})
+
+	if !strings.Contains(prompt, "You are a reviewer component") {
+		t.Fatal("expected reviewer-specific prompt")
+	}
+	if !strings.Contains(prompt, "look for counterexamples") {
+		t.Fatal("expected adversarial reviewer guidance")
+	}
+	if !strings.Contains(prompt, "idempotency") || !strings.Contains(prompt, "state-transition") {
+		t.Fatal("expected reviewer prompt to mention lifecycle invariants")
 	}
 }
 
@@ -998,6 +1025,9 @@ func TestLeaderPromptIncludesRunWorkersGuidance(t *testing.T) {
 	// Updated prompt uses "exactly 2 workers" phrasing instead of "at most 2 workers"
 	if !strings.Contains(prompt, "2 worker") {
 		t.Fatal("expected leader prompt to mention parallel worker limit")
+	}
+	if !strings.Contains(prompt, "dispatch an explicit review step") {
+		t.Fatal("expected leader prompt to include conditional audit guidance")
 	}
 }
 

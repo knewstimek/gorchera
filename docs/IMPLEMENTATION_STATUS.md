@@ -22,6 +22,12 @@ go test ./...    # PASS
   - `auto`: defers level selection to the planner phase; planner's `recommended_strictness` and `recommended_max_steps` are adopted before the sprint contract is built; falls back to `normal` if recommendation is absent or unrecognised
 - Evaluator rubric scoring: `VerificationContract.RubricAxes` defines per-axis thresholds (`name`, `weight`, `min_threshold`). The provider evaluator returns `RubricScores` (0.0-1.0 per axis). `mergeEvaluatorReport()` enforces thresholds additively -- rubric can only demote a passing report, never promote a failing one.
 - Planner prompt includes role profiles (provider/model per role) to inform `recommended_strictness` and `recommended_max_steps`; chain context section injected when `job.ChainContext` is present.
+- Role-specific worker prompts are differentiated:
+  - executor: implementation-focused
+  - reviewer: adversarial review focused on counterexamples, regressions, lifecycle/restart/retry/recovery/idempotency issues, and state-transition safety
+  - tester: verification-focused with executable evidence preferred over narrative claims
+- Evaluator prompt is gate-oriented and no longer treats a single succeeded implement step as sufficient evidence by itself.
+- Leader prompt includes a conditional high-risk review trigger before completion for lifecycle/concurrency/deduplication/external-pricing/auth/UI-event-boundary changes.
 - Leader summarize throttling: after two consecutive summarize turns, the service forces completion evaluation instead of allowing endless summary churn.
 - Repeated blocked-reason protection: the same blocked reason three times in a row escalates to job failure.
 - Startup recovery hardening:
