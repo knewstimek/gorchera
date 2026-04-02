@@ -256,8 +256,8 @@ func TestStartAndResumeToolSchemasExposePipelineControls(t *testing.T) {
 			if pipelineProp.Type != "string" {
 				t.Fatalf("gorchera_start_job pipeline_mode type = %q, want string", pipelineProp.Type)
 			}
-			if pipelineProp.Default != "balanced" {
-				t.Fatalf("gorchera_start_job pipeline_mode default = %#v, want %q", pipelineProp.Default, "balanced")
+			if pipelineProp.Default != "light" {
+				t.Fatalf("gorchera_start_job pipeline_mode default = %#v, want %q", pipelineProp.Default, "light")
 			}
 			if len(pipelineProp.Enum) != 3 {
 				t.Fatalf("gorchera_start_job pipeline_mode enum = %#v, want 3 entries", pipelineProp.Enum)

@@ -6,9 +6,9 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 
 ## Features
 
-- **6-role pipeline**: planner -> leader -> executor/reviewer/tester -> evaluator
+- **4-role pipeline**: director -> executor -> [engine build/test] -> reviewer -> evaluator
 - **3 strictness levels**: strict (implement+review+test), normal (implement only), lenient (results only)
-- **3 context modes**: full, summary, minimal -- controls leader prompt payload size
+- **3 context modes**: full, summary, minimal -- controls director prompt payload size
 - **Job chaining**: sequential multi-goal execution with automatic advancement
 - **Chain-level controls**: pause, resume, cancel, skip individual chain goals
 - **Supervisor steering**: mid-flight directive injection via `gorchera_steer`
@@ -30,9 +30,15 @@ go run ./cmd/gorchera run -goal "Add a hello function" -provider codex
 go run ./cmd/gorchera status -all
 ```
 
-## Note on Overhead
+## Pipeline Modes
 
-Gorchera runs a full pipeline (plan -> lead -> execute -> evaluate) for every job. Even trivial tasks incur baseline token cost from planning artifacts, leader coordination, and evaluator gating. For simple one-off tasks, direct execution may be more efficient. Gorchera shines on complex, multi-step tasks where structured decomposition, verification contracts, and audit trails justify the orchestration overhead.
+Gorchera supports three pipeline modes to balance quality vs cost:
+
+- **light** (default): director -> executor -> engine build/test -> evaluator. Fastest and cheapest. Skip reviewer. Good for simple changes.
+- **balanced**: Adds reviewer before evaluator. Good for moderate changes where code review catches bugs.
+- **full**: Adds fix loops and parallel workers. For complex, risky changes.
+
+Light mode with cross-provider (director=GPT, executor=Claude Sonnet) costs ~$0.04 per job.
 
 ## MCP Tools
 
@@ -86,7 +92,7 @@ Constraints: technical limits (ASCII only, no new files, specific patterns)
 Done when: completion criteria (build passes, specific behavior verified)
 ```
 
-The **Invariants** field is critical -- it carries operational knowledge that the planner cannot derive from code alone (e.g., "addEvent() must update the in-memory cache immediately to prevent status API stale data").
+The **Invariants** field is critical -- it carries operational knowledge that the director cannot derive from code alone (e.g., "addEvent() must update the in-memory cache immediately to prevent status API stale data").
 
 ## Documentation
 

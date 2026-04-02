@@ -424,7 +424,7 @@ func toolList() []toolDef {
 	return []toolDef{
 		{
 			Name:        "gorchera_start_job",
-			Description: "Start a new Gorchera job. The job runs asynchronously; use gorchera_status to poll progress.",
+			Description: "Start a new Gorchera job. Pipeline: director -> executor -> [engine build/test] -> reviewer(balanced/full) -> evaluator. Use pipeline_mode to control overhead.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
@@ -433,7 +433,7 @@ func toolList() []toolDef {
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
 					"workspace_mode":   {Type: "string", Description: "Workspace mode: shared | isolated. isolated creates a detached git worktree rooted at HEAD for the job.", Default: "shared"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
-					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light | balanced | full. Omit to preserve balanced mode.", Default: "balanced", Enum: []string{"light", "balanced", "full"}},
+					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light (default, skip reviewer) | balanced (add reviewer) | full (fix loops + parallel workers)", Default: "light", Enum: []string{"light", "balanced", "full"}},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
@@ -779,7 +779,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	workspaceDir := stringArg(args, "workspace_dir")
 	workspaceMode := stringArgDefault(args, "workspace_mode", string(domain.WorkspaceModeShared))
 	maxSteps := intArgDefault(args, "max_steps", 8)
-	pipelineMode := stringArgDefault(args, "pipeline_mode", "balanced")
+	pipelineMode := stringArgDefault(args, "pipeline_mode", "light")
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
 	ambitionLevel := stringArgDefault(args, "ambition_level", domain.AmbitionLevelMedium)
 	contextMode := stringArgDefault(args, "context_mode", "full")
