@@ -35,6 +35,10 @@ go test ./...    # PASS
   - `runLoop()` is single-flight per job ID within a process, so duplicate `Resume()` / recovery attempts are suppressed.
   - `RecoverJobs()` now schedules recoverable jobs with bounded concurrency (`2`) instead of unbounded fan-out.
   - Recovery is only triggered for long-lived controller commands (`serve`, `mcp`), not for one-shot CLI commands.
+- MCP stdio smoke coverage:
+  - `cmd/mcp-smoke` runs isolated end-to-end MCP scenarios against a real `gorchera mcp` subprocess.
+  - `basic` validates `initialize -> tools/list -> start_job -> status(wait=true)` using the mock provider.
+  - `recovery` seeds recoverable jobs under an isolated `.gorchera` root, restarts `mcp`, and verifies startup recovery completes them without touching the main workspace state.
 - Rough token/cost accounting using serialized input/output heuristics.
 
 ### Provider integration

@@ -4,6 +4,7 @@
 
 ```text
 cmd/gorchera/main.go             -- CLI entrypoint and command routing
+cmd/mcp-smoke/main.go            -- Isolated MCP stdio smoke runner for end-to-end subprocess checks
 internal/
   api/
     server.go                    -- HTTP control plane for jobs and harness views
@@ -12,6 +13,7 @@ internal/
     views.go                     -- Verification/planning/profile/runtime views
   domain/types.go                -- Canonical domain types: Job, Step, JobChain, RoleProfiles, contracts
   mcp/server.go                  -- MCP stdio server, job/chain tools, wait polling, steer tool
+  mcpsmoke/smoke.go              -- MCP subprocess client + isolated smoke scenarios
   orchestrator/
     service.go                   -- Core runLoop, job lifecycle, chain lifecycle, steer, harness ownership
     planning.go                  -- Planner phase, strictness/context normalization, sprint contract build
