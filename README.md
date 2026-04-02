@@ -72,6 +72,22 @@ When using Gorchera with an AI supervisor (e.g., Claude Opus via MCP), the super
 
 This separation ensures that all work is auditable, artifact-tracked, and evaluator-gated -- the core value proposition of using an orchestration engine over direct AI coding.
 
+### Writing Effective Goals
+
+Goal quality determines job quality. Terse goals ("fix XSS") produce mechanical execution with subtle bugs. Structure your goals:
+
+```
+Objective: what to achieve
+Why: business/UX impact, real problems encountered
+In-scope: files/modules/features to change
+Out-of-scope: what NOT to touch
+Invariants: things that must NOT break (recovery logic, state machine, existing tests)
+Constraints: technical limits (ASCII only, no new files, specific patterns)
+Done when: completion criteria (build passes, specific behavior verified)
+```
+
+The **Invariants** field is critical -- it carries operational knowledge that the planner cannot derive from code alone (e.g., "addEvent() must update the in-memory cache immediately to prevent status API stale data").
+
 ## Documentation
 
 1. [ARCHITECTURE.md](./docs/ARCHITECTURE.md) -- package structure, state machine, core loop
