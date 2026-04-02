@@ -213,7 +213,8 @@ func (s *Server) handleTerminalCallbackValues(args []reflect.Value) {
 		if strings.TrimSpace(jobID) == "" || !isTerminalJobStatus(status) {
 			return
 		}
-		s.sendJobTerminalNotification(jobID, status, summary)
+		// No job object available here; worktree info is not included.
+		s.sendJobTerminalNotification(jobID, status, summary, nil)
 	}
 }
 
@@ -224,11 +225,11 @@ func (s *Server) handleSingleTerminalCallbackArg(arg reflect.Value) {
 	switch v := arg.Interface().(type) {
 	case domain.Job:
 		if isTerminalJobStatus(v.Status) {
-			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(&v))
+			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(&v), isolatedWorktreeExtra(&v))
 		}
 	case *domain.Job:
 		if v != nil && isTerminalJobStatus(v.Status) {
-			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(v))
+			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(v), isolatedWorktreeExtra(v))
 		}
 	}
 }
@@ -270,7 +271,7 @@ func (s *Server) awaitAndSendTerminalNotification(jobID string) {
 	for {
 		job, err := s.service.Get(context.Background(), jobID)
 		if err == nil && job != nil && isTerminalJobStatus(job.Status) {
-			s.sendJobTerminalNotification(job.ID, job.Status, terminalSummary(job))
+			s.sendJobTerminalNotification(job.ID, job.Status, terminalSummary(job), isolatedWorktreeExtra(job))
 			return
 		}
 		if time.Now().After(deadline) {
@@ -280,7 +281,10 @@ func (s *Server) awaitAndSendTerminalNotification(jobID string) {
 	}
 }
 
-func (s *Server) sendJobTerminalNotification(jobID string, status domain.JobStatus, summary string) {
+// sendJobTerminalNotification sends a job_terminal notification to the MCP client.
+// extra holds optional fields (e.g. workspace_mode, workspace_dir, diff_stat) that are
+// merged into the payload only when present -- callers pass nil for shared-workspace jobs.
+func (s *Server) sendJobTerminalNotification(jobID string, status domain.JobStatus, summary string, extra map[string]any) {
 	signature := string(status) + "\x00" + summary
 
 	s.terminalMu.Lock()
@@ -291,11 +295,15 @@ func (s *Server) sendJobTerminalNotification(jobID string, status domain.JobStat
 	s.lastTerminal[jobID] = signature
 	s.terminalMu.Unlock()
 
-	s.sendNotification("notifications/job_terminal", map[string]any{
+	payload := map[string]any{
 		"job_id":  jobID,
 		"status":  status,
 		"summary": summary,
-	})
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	s.sendNotification("notifications/job_terminal", payload)
 }
 
 func terminalSummary(job *domain.Job) string {
@@ -312,6 +320,38 @@ func terminalSummary(job *domain.Job) string {
 		return job.FailureReason
 	}
 	return ""
+}
+
+// isolatedWorktreeExtra returns extra payload fields for jobs that ran in an
+// isolated worktree, so the supervisor can decide whether to merge or discard
+// the changes. Returns nil for shared-workspace jobs (no extra fields emitted).
+func isolatedWorktreeExtra(job *domain.Job) map[string]any {
+	if job == nil || job.WorkspaceMode != string(domain.WorkspaceModeIsolated) {
+		return nil
+	}
+
+	extra := map[string]any{
+		"workspace_mode": job.WorkspaceMode,
+		"workspace_dir":  job.WorkspaceDir,
+	}
+	if job.RequestedWorkspaceDir != "" {
+		extra["requested_workspace_dir"] = job.RequestedWorkspaceDir
+	}
+
+	// Collect a short diff summary so the supervisor can gauge the scope of
+	// changes without having to inspect the worktree manually. Failure is
+	// non-fatal -- we still send the notification without diff_stat.
+	if job.WorkspaceDir != "" {
+		out, err := exec.Command("git", "-C", job.WorkspaceDir, "diff", "--stat").Output()
+		if err == nil {
+			stat := strings.TrimSpace(string(out))
+			if stat != "" {
+				extra["diff_stat"] = stat
+			}
+		}
+	}
+
+	return extra
 }
 
 // ---- JSON-RPC types --------------------------------------------------------
@@ -666,7 +706,7 @@ func boundedIntegerSchema(description string, minimum, maximum int) schemaProp {
 func roleOverridesSchema() schemaProp {
 	return schemaProp{
 		Type:        "object",
-		Description: "Per-role provider/model overrides. Supports director-era roles and legacy planner/leader/tester compatibility during migration.",
+		Description: "Optional map of role name to {provider, model} overrides. Supports director-era roles and legacy planner/leader/tester compatibility during migration.",
 		Properties: map[string]schemaProp{
 			"director":  roleOverrideProfileSchema(),
 			"planner":   roleOverrideProfileSchema(),
@@ -790,7 +830,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		return toolResult{}, err
 	}
 
-	var roleOverrides map[string]domain.RoleProfile
+	var roleOverrides map[string]domain.RoleOverride
 	if roRaw, ok := args["role_overrides"]; ok {
 		if roMap, ok := roRaw.(map[string]any); ok {
 			roleOverrides = parseRoleOverrides(roMap)
@@ -868,16 +908,16 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 }
 
 // parseRoleOverrides converts a raw map[string]any (from JSON) into a typed
-// map[string]domain.RoleProfile. Keys that are not valid role names or whose
-// values cannot be type-asserted are silently skipped.
-func parseRoleOverrides(raw map[string]any) map[string]domain.RoleProfile {
-	result := make(map[string]domain.RoleProfile, len(raw))
+// map[string]domain.RoleOverride. Keys whose values cannot be type-asserted
+// are silently skipped.
+func parseRoleOverrides(raw map[string]any) map[string]domain.RoleOverride {
+	result := make(map[string]domain.RoleOverride, len(raw))
 	for role, val := range raw {
 		m, ok := val.(map[string]any)
 		if !ok {
 			continue
 		}
-		var rp domain.RoleProfile
+		var rp domain.RoleOverride
 		if p, ok := m["provider"].(string); ok {
 			rp.Provider = domain.ProviderName(p)
 		}
@@ -1402,7 +1442,6 @@ func (s *Server) resumeJob(ctx context.Context, jobID string, extraSteps int) (*
 		ExtraSteps: extraSteps,
 	})
 }
-
 
 func statusWaitDuration(args map[string]any, wait bool) time.Duration {
 	if !wait {

@@ -77,6 +77,44 @@ func TestServiceStartCompletesMockLoop(t *testing.T) {
 	}
 }
 
+func TestServiceStartPersistsCanonicalRoleOverrides(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	registry.Register(mock.New())
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	job, err := service.Start(context.Background(), orchestrator.CreateJobInput{
+		Goal:     "Persist canonical role overrides",
+		Provider: domain.ProviderMock,
+		MaxSteps: 8,
+		RoleOverrides: map[string]domain.RoleOverride{
+			" evaluator ": {Provider: domain.ProviderMock, Model: "opus"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if got := job.RoleOverrides["evaluator"].Model; got != "opus" {
+		t.Fatalf("job evaluator override model = %q, want %q", got, "opus")
+	}
+
+	persisted, err := service.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got := persisted.RoleOverrides["evaluator"].Provider; got != domain.ProviderMock {
+		t.Fatalf("persisted evaluator override provider = %q, want %q", got, domain.ProviderMock)
+	}
+}
+
 func TestServiceStartHandlesPlannerOutputWithoutInvariants(t *testing.T) {
 	t.Parallel()
 
@@ -624,6 +662,64 @@ func TestServiceStartChainPropagatesAmbitionLevelToJobs(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func TestServiceStartChainPropagatesRoleOverridesToJobs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	workspace := t.TempDir()
+	registry := provider.NewRegistry()
+	control := &chainOutcomeProvider{
+		name:    domain.ProviderName("chain-role-overrides"),
+		release: make(chan struct{}),
+	}
+	registry.Register(control)
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+	t.Cleanup(service.Shutdown)
+
+	chain, err := service.StartChain(context.Background(), []domain.ChainGoal{
+		{
+			Goal:          "hold first",
+			Provider:      control.name,
+			ContextMode:   "full",
+			MaxSteps:      4,
+			RoleOverrides: map[string]domain.RoleOverride{" evaluator ": {Provider: control.name, Model: "opus"}},
+		},
+		{
+			Goal:        "finish second",
+			Provider:    control.name,
+			ContextMode: "full",
+			MaxSteps:    4,
+		},
+	}, workspace)
+	if err != nil {
+		t.Fatalf("StartChain returned error: %v", err)
+	}
+
+	latest, err := service.GetChain(context.Background(), chain.ID)
+	if err != nil {
+		t.Fatalf("GetChain returned error: %v", err)
+	}
+	if got := latest.Goals[0].RoleOverrides["evaluator"].Model; got != "opus" {
+		t.Fatalf("chain goal evaluator override model = %q, want %q", got, "opus")
+	}
+
+	job, err := service.Get(context.Background(), latest.Goals[0].JobID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got := job.RoleOverrides["evaluator"].Provider; got != control.name {
+		t.Fatalf("job evaluator override provider = %q, want %q", got, control.name)
+	}
+
+	close(control.release)
 }
 
 func TestServiceStartChainStopsOnUnsuccessfulTerminalJob(t *testing.T) {

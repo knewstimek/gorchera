@@ -130,12 +130,12 @@ func (m *SessionManager) resolveJobForRole(job domain.Job, role domain.RoleName)
 
 func (m *SessionManager) resolveProfile(job domain.Job, role domain.RoleName) domain.ExecutionProfile {
 	profile := job.RoleProfiles.ProfileFor(role, "")
-	if override, ok := job.RoleOverrides[string(role)]; ok {
-		if override.Provider != "" {
-			profile.Provider = override.Provider
+	if roleOverride, ok := job.RoleOverrides[string(role)]; ok {
+		if roleOverride.Provider != "" {
+			profile.Provider = roleOverride.Provider
 		}
-		if strings.TrimSpace(override.Model) != "" {
-			profile.Model = override.Model
+		if strings.TrimSpace(roleOverride.Model) != "" {
+			profile.Model = roleOverride.Model
 		}
 	}
 	if profile.Provider == "" {

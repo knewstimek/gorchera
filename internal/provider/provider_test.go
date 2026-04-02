@@ -230,7 +230,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Leader: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "leader-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"leader": {Provider: domain.ProviderName("leader-provider"), Model: "leader-override-model"},
 				},
 			},
@@ -246,7 +246,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Planner: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "planner-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"planner": {Provider: domain.ProviderName("planner-provider"), Model: "planner-override-model"},
 				},
 			},
@@ -262,7 +262,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Evaluator: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "evaluator-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"evaluator": {Provider: domain.ProviderName("evaluator-provider"), Model: "evaluator-override-model"},
 				},
 			},
@@ -278,7 +278,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"executor": {Provider: domain.ProviderName("executor-provider"), Model: "executor-override-model"},
 				},
 			},
@@ -294,7 +294,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Reviewer: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "reviewer-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"reviewer": {Provider: domain.ProviderName("reviewer-provider"), Model: "reviewer-override-model"},
 				},
 			},
@@ -310,7 +310,7 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"executor": {Provider: domain.ProviderName("executor-provider"), Model: "executor-override-model"},
 				},
 			},
@@ -364,7 +364,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Leader: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "leader-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"leader": {Provider: domain.ProviderName("leader-override-provider")},
 				},
 			},
@@ -380,7 +380,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Planner: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "planner-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"planner": {Model: "planner-override-model"},
 				},
 			},
@@ -396,7 +396,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Evaluator: domain.ExecutionProfile{Model: "evaluator-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"evaluator": {Model: "evaluator-override-model"},
 				},
 			},
@@ -412,7 +412,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"executor": {Provider: domain.ProviderName("executor-override-provider")},
 				},
 			},
@@ -428,7 +428,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Reviewer: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "reviewer-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"reviewer": {Model: "reviewer-override-model"},
 				},
 			},
@@ -444,7 +444,7 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 				RoleProfiles: domain.RoleProfiles{
 					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
-				RoleOverrides: map[string]domain.RoleProfile{
+				RoleOverrides: map[string]domain.RoleOverride{
 					"executor": {Provider: domain.ProviderName("executor-override-provider")},
 				},
 			},

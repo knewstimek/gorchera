@@ -246,8 +246,8 @@ Adapter-specific model behavior:
 - The `fallback_model` retry is runtime-only; it does not change provider lookup and does not fan out into multiple fallback attempts
 
 Role overrides on chains:
-- Each `ChainGoal` carries `RoleOverrides map[string]RoleProfile` alongside its other per-goal fields.
-- MCP `gorchera_start_chain` accepts a `role_overrides` object per goal entry.
+- Each `ChainGoal` carries `RoleOverrides map[string]RoleOverride` alongside its other per-goal fields.
+- MCP `gorchera_start_chain` accepts a `role_overrides` object per goal entry, with each entry shaped as `{provider, model}`.
 - MCP `gorchera_start_job` accepts the same `role_overrides` shape for single-job starts.
 - `startChainGoal()` copies `goal.RoleOverrides` into `CreateJobInput.RoleOverrides` when creating the job for that step.
 - Resolution priority inside the job: `RoleOverrides[role]` > `RoleProfiles[role]` > job provider > mock fallback.

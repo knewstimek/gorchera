@@ -52,7 +52,7 @@ type CreateJobInput struct {
 	DoneCriteria    []string
 	Provider        domain.ProviderName
 	RoleProfiles    domain.RoleProfiles
-	RoleOverrides   map[string]domain.RoleProfile
+	RoleOverrides   map[string]domain.RoleOverride
 	MaxSteps        int
 	PipelineMode    string
 	StrictnessLevel string // strict | normal | lenient; empty defaults to "normal"
@@ -377,7 +377,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 			AmbitionLevel:   domain.NormalizeAmbitionLevel(goal.AmbitionLevel),
 			ContextMode:     normalizeContextMode(goal.ContextMode),
 			MaxSteps:        goal.MaxSteps,
-			RoleOverrides:   goal.RoleOverrides,
+			RoleOverrides:   canonicalizeRoleOverrides(goal.RoleOverrides),
 			Status:          domain.ChainGoalStatusPending,
 		}
 		if chain.Goals[i].Goal == "" {
@@ -445,14 +445,19 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 	return job, nil
 }
 
-func canonicalizeRoleOverrides(overrides map[string]domain.RoleProfile) map[string]domain.RoleProfile {
+func canonicalizeRoleOverrides(overrides map[string]domain.RoleOverride) map[string]domain.RoleOverride {
 	if len(overrides) == 0 {
 		return nil
 	}
-	canonical := make(map[string]domain.RoleProfile, len(overrides)+2)
+	canonical := make(map[string]domain.RoleOverride, len(overrides)+2)
 	for key, value := range overrides {
 		trimmed := strings.ToLower(strings.TrimSpace(key))
 		if trimmed == "" {
+			continue
+		}
+		value.Provider = domain.ProviderName(strings.TrimSpace(string(value.Provider)))
+		value.Model = strings.TrimSpace(value.Model)
+		if value.Provider == "" && value.Model == "" {
 			continue
 		}
 		canonical[trimmed] = value
@@ -598,6 +603,9 @@ func (s *Service) ResumeWithOptions(ctx context.Context, jobID string, options R
 	}
 	if job.Status == domain.JobStatusDone || job.Status == domain.JobStatusFailed {
 		return job, nil
+	}
+	if job.PendingApproval != nil {
+		return job, fmt.Errorf("job has a pending approval; use approve or reject instead of resume")
 	}
 	if err := s.applyResumeExtraSteps(ctx, job, options.ExtraSteps); err != nil {
 		return nil, err

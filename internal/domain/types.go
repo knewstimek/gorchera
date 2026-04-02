@@ -81,7 +81,7 @@ type ExecutionProfile struct {
 	MaxBudgetUSD     float64      `json:"max_budget_usd,omitempty"`
 }
 
-type RoleProfile struct {
+type RoleOverride struct {
 	Provider ProviderName `json:"provider,omitempty"`
 	Model    string       `json:"model,omitempty"`
 }
@@ -280,16 +280,16 @@ func ValidChainStatus(status ChainStatus) bool {
 }
 
 type ChainGoal struct {
-	Goal            string                 `json:"goal"`
-	Provider        ProviderName           `json:"provider"`
-	PipelineMode    string                 `json:"pipeline_mode,omitempty"`
-	StrictnessLevel string                 `json:"strictness_level,omitempty"`
-	AmbitionLevel   string                 `json:"ambition_level,omitempty"`
-	ContextMode     string                 `json:"context_mode,omitempty"`
-	MaxSteps        int                    `json:"max_steps"`
-	RoleOverrides   map[string]RoleProfile `json:"role_overrides,omitempty"`
-	JobID           string                 `json:"job_id,omitempty"`
-	Status          string                 `json:"status"`
+	Goal            string                  `json:"goal"`
+	Provider        ProviderName            `json:"provider"`
+	PipelineMode    string                  `json:"pipeline_mode,omitempty"`
+	StrictnessLevel string                  `json:"strictness_level,omitempty"`
+	AmbitionLevel   string                  `json:"ambition_level,omitempty"`
+	ContextMode     string                  `json:"context_mode,omitempty"`
+	MaxSteps        int                     `json:"max_steps"`
+	RoleOverrides   map[string]RoleOverride `json:"role_overrides,omitempty"`
+	JobID           string                  `json:"job_id,omitempty"`
+	Status          string                  `json:"status"`
 }
 
 type JobChain struct {
@@ -446,47 +446,47 @@ type Step struct {
 }
 
 type Job struct {
-	ID                      string                 `json:"id"`
-	Goal                    string                 `json:"goal"`
-	TechStack               string                 `json:"tech_stack,omitempty"`
-	WorkspaceDir            string                 `json:"workspace_dir,omitempty"`
-	RequestedWorkspaceDir   string                 `json:"requested_workspace_dir,omitempty"`
-	WorkspaceMode           string                 `json:"workspace_mode,omitempty"`
-	Constraints             []string               `json:"constraints,omitempty"`
-	DoneCriteria            []string               `json:"done_criteria,omitempty"`
-	PipelineMode            string                 `json:"pipeline_mode,omitempty"`
-	StrictnessLevel         string                 `json:"strictness_level,omitempty"` // strict | normal | lenient
-	AmbitionLevel           string                 `json:"ambition_level,omitempty"`   // low | medium | high
-	ContextMode             string                 `json:"context_mode,omitempty"`     // full | summary | minimal
-	RoleProfiles            RoleProfiles           `json:"role_profiles"`
-	RoleOverrides           map[string]RoleProfile `json:"role_overrides,omitempty"`
-	VerificationContract    *VerificationContract  `json:"verification_contract,omitempty"`
-	VerificationContractRef string                 `json:"verification_contract_ref,omitempty"`
-	PlanningArtifacts       []string               `json:"planning_artifacts,omitempty"`
-	SprintContractRef       string                 `json:"sprint_contract_ref,omitempty"`
-	EvaluatorReportRef      string                 `json:"evaluator_report_ref,omitempty"`
-	ChainID                 string                 `json:"chain_id,omitempty"`
-	ChainGoalIndex          int                    `json:"chain_goal_index,omitempty"`
-	ChainContext            *ChainContext          `json:"chain_context,omitempty"`
-	Status                  JobStatus              `json:"status"`
-	Provider                ProviderName           `json:"provider"`
-	MaxSteps                int                    `json:"max_steps"`
-	CurrentStep             int                    `json:"current_step"`
-	RetryCount              int                    `json:"retry_count"`
-	ResumeExtraStepsUsed    int                    `json:"resume_extra_steps_used,omitempty"`
-	BlockedReason           string                 `json:"blocked_reason,omitempty"`
-	FailureReason           string                 `json:"failure_reason,omitempty"`
-	PendingApproval         *PendingApproval       `json:"pending_approval,omitempty"`
-	Summary                 string                 `json:"summary,omitempty"`
-	LeaderContextSummary    string                 `json:"leader_context_summary,omitempty"`
-	SupervisorDirective     string                 `json:"supervisor_directive,omitempty"`
-	RunOwnerID              string                 `json:"run_owner_id,omitempty"`
-	RunHeartbeatAt          time.Time              `json:"run_heartbeat_at,omitempty"`
-	TokenUsage              TokenUsage             `json:"token_usage"`
-	Steps                   []Step                 `json:"steps,omitempty"`
-	Events                  []Event                `json:"events,omitempty"`
-	CreatedAt               time.Time              `json:"created_at"`
-	UpdatedAt               time.Time              `json:"updated_at"`
+	ID                      string                  `json:"id"`
+	Goal                    string                  `json:"goal"`
+	TechStack               string                  `json:"tech_stack,omitempty"`
+	WorkspaceDir            string                  `json:"workspace_dir,omitempty"`
+	RequestedWorkspaceDir   string                  `json:"requested_workspace_dir,omitempty"`
+	WorkspaceMode           string                  `json:"workspace_mode,omitempty"`
+	Constraints             []string                `json:"constraints,omitempty"`
+	DoneCriteria            []string                `json:"done_criteria,omitempty"`
+	PipelineMode            string                  `json:"pipeline_mode,omitempty"`
+	StrictnessLevel         string                  `json:"strictness_level,omitempty"` // strict | normal | lenient
+	AmbitionLevel           string                  `json:"ambition_level,omitempty"`   // low | medium | high
+	ContextMode             string                  `json:"context_mode,omitempty"`     // full | summary | minimal
+	RoleProfiles            RoleProfiles            `json:"role_profiles"`
+	RoleOverrides           map[string]RoleOverride `json:"role_overrides,omitempty"`
+	VerificationContract    *VerificationContract   `json:"verification_contract,omitempty"`
+	VerificationContractRef string                  `json:"verification_contract_ref,omitempty"`
+	PlanningArtifacts       []string                `json:"planning_artifacts,omitempty"`
+	SprintContractRef       string                  `json:"sprint_contract_ref,omitempty"`
+	EvaluatorReportRef      string                  `json:"evaluator_report_ref,omitempty"`
+	ChainID                 string                  `json:"chain_id,omitempty"`
+	ChainGoalIndex          int                     `json:"chain_goal_index,omitempty"`
+	ChainContext            *ChainContext           `json:"chain_context,omitempty"`
+	Status                  JobStatus               `json:"status"`
+	Provider                ProviderName            `json:"provider"`
+	MaxSteps                int                     `json:"max_steps"`
+	CurrentStep             int                     `json:"current_step"`
+	RetryCount              int                     `json:"retry_count"`
+	ResumeExtraStepsUsed    int                     `json:"resume_extra_steps_used,omitempty"`
+	BlockedReason           string                  `json:"blocked_reason,omitempty"`
+	FailureReason           string                  `json:"failure_reason,omitempty"`
+	PendingApproval         *PendingApproval        `json:"pending_approval,omitempty"`
+	Summary                 string                  `json:"summary,omitempty"`
+	LeaderContextSummary    string                  `json:"leader_context_summary,omitempty"`
+	SupervisorDirective     string                  `json:"supervisor_directive,omitempty"`
+	RunOwnerID              string                  `json:"run_owner_id,omitempty"`
+	RunHeartbeatAt          time.Time               `json:"run_heartbeat_at,omitempty"`
+	TokenUsage              TokenUsage              `json:"token_usage"`
+	Steps                   []Step                  `json:"steps,omitempty"`
+	Events                  []Event                 `json:"events,omitempty"`
+	CreatedAt               time.Time               `json:"created_at"`
+	UpdatedAt               time.Time               `json:"updated_at"`
 }
 
 // CloneJob returns a deep copy of the job so that the caller cannot mutate
@@ -553,7 +553,7 @@ func CloneJob(src *Job) *Job {
 
 	// Deep-copy RoleOverrides map.
 	if len(src.RoleOverrides) > 0 {
-		dst.RoleOverrides = make(map[string]RoleProfile, len(src.RoleOverrides))
+		dst.RoleOverrides = make(map[string]RoleOverride, len(src.RoleOverrides))
 		for k, v := range src.RoleOverrides {
 			dst.RoleOverrides[k] = v
 		}

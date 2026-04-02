@@ -143,6 +143,61 @@ func TestToolStartJobPersistsRoleOverrides(t *testing.T) {
 	waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
 }
 
+func TestToolStartChainPersistsRoleOverridesPerGoal(t *testing.T) {
+	t.Parallel()
+
+	control := &mcpChainProvider{
+		name:    domain.ProviderName("mcp-chain-overrides"),
+		release: make(chan struct{}),
+	}
+	server, service, _ := newTestServer(t, control)
+	workspace := t.TempDir()
+
+	result, err := server.toolStartChain(context.Background(), map[string]any{
+		"workspace_dir": workspace,
+		"goals": []any{
+			map[string]any{
+				"goal":     "hold first",
+				"provider": string(control.name),
+				"role_overrides": map[string]any{
+					" evaluator ": map[string]any{
+						"provider": string(control.name),
+						"model":    "opus",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("toolStartChain returned error: %v", err)
+	}
+
+	var started struct {
+		ChainID string `json:"chain_id"`
+	}
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &started); err != nil {
+		t.Fatalf("failed to decode chain result: %v", err)
+	}
+	chain, err := service.GetChain(context.Background(), started.ChainID)
+	if err != nil {
+		t.Fatalf("GetChain returned error: %v", err)
+	}
+	if got := chain.Goals[0].RoleOverrides["evaluator"].Model; got != "opus" {
+		t.Fatalf("chain goal evaluator override model = %q, want %q", got, "opus")
+	}
+
+	job, err := service.Get(context.Background(), chain.Goals[0].JobID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got := job.RoleOverrides["evaluator"].Provider; got != control.name {
+		t.Fatalf("job evaluator override provider = %q, want %q", got, control.name)
+	}
+
+	close(control.release)
+	waitForTerminalChainStatus(t, service, started.ChainID)
+}
+
 func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	t.Parallel()
 
@@ -275,6 +330,13 @@ func TestStartAndResumeToolSchemasExposePipelineControls(t *testing.T) {
 			if _, ok := roleOverridesProp.Properties["executor"]; !ok {
 				t.Fatal("gorchera_start_job role_overrides missing executor")
 			}
+			directorProp := roleOverridesProp.Properties["director"]
+			if _, ok := directorProp.Properties["provider"]; !ok {
+				t.Fatal("gorchera_start_job role_overrides.director missing provider")
+			}
+			if _, ok := directorProp.Properties["model"]; !ok {
+				t.Fatal("gorchera_start_job role_overrides.director missing model")
+			}
 		case "gorchera_start_chain":
 			foundChain = true
 			goalsProp, ok := tool.InputSchema.Properties["goals"]
@@ -300,6 +362,13 @@ func TestStartAndResumeToolSchemasExposePipelineControls(t *testing.T) {
 			}
 			if _, ok := roleOverridesProp.Properties["director"]; !ok {
 				t.Fatal("gorchera_start_chain role_overrides missing director")
+			}
+			directorProp := roleOverridesProp.Properties["director"]
+			if _, ok := directorProp.Properties["provider"]; !ok {
+				t.Fatal("gorchera_start_chain role_overrides.director missing provider")
+			}
+			if _, ok := directorProp.Properties["model"]; !ok {
+				t.Fatal("gorchera_start_chain role_overrides.director missing model")
 			}
 		case "gorchera_resume":
 			foundResume = true
@@ -665,16 +734,13 @@ func TestToolStatusWaitReturnsBlockedForOperatorCancellation(t *testing.T) {
 
 	job := startMCPJob(t, server, workspace, string(control.name))
 
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		_, _ = service.Cancel(context.Background(), job.ID, "operator stop")
-	}()
+	_, _ = service.Cancel(context.Background(), job.ID, "operator stop")
 
 	waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
 
 	result, err := server.toolStatus(context.Background(), map[string]any{
 		"job_id": job.ID,
-		"wait":   true,
+		"wait":   false,
 	})
 	if err != nil {
 		t.Fatalf("toolStatus returned error: %v", err)
@@ -978,7 +1044,7 @@ func TestJobTerminalNotificationBufferedUntilWriterInstalled(t *testing.T) {
 	t.Parallel()
 
 	server, _, _ := newTestServer(t, mock.New())
-	server.sendJobTerminalNotification("job-1", domain.JobStatusBlocked, "buffered")
+	server.sendJobTerminalNotification("job-1", domain.JobStatusBlocked, "buffered", nil)
 
 	var out lockedBuffer
 	server.installWriter(&out)

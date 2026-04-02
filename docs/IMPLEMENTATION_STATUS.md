@@ -5,8 +5,8 @@ Last verified: 2026-04-03
 ## Build And Test
 
 ```bash
-go build ./...   # FAIL in this worktree: internal/orchestrator/service.go imports os but does not use it
-go test ./...    # FAIL for the same compile error
+go build ./...   # PASS
+go test ./...    # PASS
 ```
 
 ## Implemented
@@ -82,7 +82,7 @@ go test ./...    # FAIL for the same compile error
   - `job.RoleProfiles[role]` second
   - job provider third
   - `mock` fallback last
-- MCP `gorchera_start_job` now accepts a structured `role_overrides` object with per-role `provider` / `model` overrides and persists it onto the started job.
+- MCP `gorchera_start_job` now accepts a structured `role_overrides` object with per-role `{provider, model}` overrides and persists it onto the started job as `map[string]RoleOverride`.
 - MCP and HTTP job start surfaces now also accept `workspace_mode` (`shared` | `isolated`).
 - `fallback_provider` is honored if the primary provider lookup fails.
 - `fallback_model` is honored narrowly at runtime:
@@ -119,7 +119,7 @@ go test ./...    # FAIL for the same compile error
 - Per-goal fields for provider, strictness level, ambition level, context mode, max steps, job ID, and goal status.
 - Automatic next-goal start after evaluator-approved completion of the current goal.
 - Chain result forwarding: completed job's `Summary` and `EvaluatorReportRef` are packaged as `ChainContext` and passed to the next goal's planner prompt.
-- Per-goal `role_overrides`: each `ChainGoal` supports `map[string]RoleProfile` overrides; MCP `gorchera_start_chain` exposes these as per-goal `role_overrides` objects.
+- Per-goal `role_overrides`: each `ChainGoal` supports `map[string]RoleOverride` overrides; MCP `gorchera_start_chain` exposes these as per-goal `role_overrides` objects with `{provider, model}` values.
 - Terminal propagation from blocked/failed chained jobs to chain failure.
 - Chain controls are implemented:
   - pause

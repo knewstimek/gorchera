@@ -53,3 +53,9 @@ provider=codex, executor/reviewer=claude sonnet. Result: GPT plans, Claude execu
 - Update `docs/` when changing behavior
 - New features: see `docs/CODING_CONVENTIONS.md` extension guide
 - Comment intent on non-obvious logic ("why this way")
+
+## Audit: Orchestrator-Specific Checks
+
+/audit 실행 시 글로벌 스킬 항목 외에 추가로 확인할 것:
+- **Evaluator gate bypass** -- evaluateCompletion() 없이 done 처리되는 경로가 없는지
+- **Approval policy bypass** -- PendingApproval 상태에서 승인 없이 위험 작업 실행되는 경로가 없는지
