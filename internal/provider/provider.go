@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -93,20 +94,27 @@ func (m *SessionManager) RunEvaluator(ctx context.Context, job domain.Job) (stri
 }
 
 func (m *SessionManager) runRole(ctx context.Context, job domain.Job, role domain.RoleName, invoke func(Adapter, domain.Job) (string, error)) (string, error) {
-	effectiveJob, profile := m.resolveJobForRole(job, role)
-	adapter, err := m.adapterForProfile(profile)
-	if err != nil {
-		return "", err
-	}
-	return invoke(adapter, effectiveJob)
+	return m.runWithResolvedProfile(job, role, invoke)
 }
 
 func (m *SessionManager) runPhase(ctx context.Context, job domain.Job, role domain.RoleName, invoke func(Adapter, domain.Job) (string, error)) (string, error) {
+	return m.runWithResolvedProfile(job, role, invoke)
+}
+
+func (m *SessionManager) runWithResolvedProfile(job domain.Job, role domain.RoleName, invoke func(Adapter, domain.Job) (string, error)) (string, error) {
 	effectiveJob, profile := m.resolveJobForRole(job, role)
 	adapter, err := m.adapterForProfile(profile)
 	if err != nil {
 		return "", err
 	}
+	output, err := invoke(adapter, effectiveJob)
+	if err == nil || !shouldRetryWithFallbackModel(profile, err) {
+		return output, err
+	}
+
+	retryProfile := profile
+	retryProfile.Model = strings.TrimSpace(profile.FallbackModel)
+	effectiveJob.RoleProfiles = setRoleProfile(effectiveJob.RoleProfiles, role, retryProfile)
 	return invoke(adapter, effectiveJob)
 }
 
@@ -150,6 +158,28 @@ func (m *SessionManager) adapterForProfile(profile domain.ExecutionProfile) (Ada
 		}
 	} else {
 		return nil, err
+	}
+}
+
+func shouldRetryWithFallbackModel(profile domain.ExecutionProfile, err error) bool {
+	fallbackModel := strings.TrimSpace(profile.FallbackModel)
+	if fallbackModel == "" || fallbackModel == strings.TrimSpace(profile.Model) {
+		return false
+	}
+
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	return isPreStructuredProviderFailure(providerErr.Kind)
+}
+
+func isPreStructuredProviderFailure(kind ProviderErrorKind) bool {
+	switch kind {
+	case ErrorKindCommandFailed, ErrorKindAuthFailure, ErrorKindQuotaExceeded, ErrorKindRateLimited, ErrorKindBillingRequired, ErrorKindSessionExpired, ErrorKindNetworkError, ErrorKindTransportError:
+		return true
+	default:
+		return false
 	}
 }
 

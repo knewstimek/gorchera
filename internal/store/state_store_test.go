@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,57 @@ func TestStateStoreSaveJobOverwritesExistingFile(t *testing.T) {
 	job.UpdatedAt = time.Now().UTC()
 	if err := state.SaveJob(context.Background(), job); err != nil {
 		t.Fatalf("SaveJob overwrite returned error: %v", err)
+	}
+
+	loaded, err := state.LoadJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("LoadJob returned error: %v", err)
+	}
+	if loaded.Status != domain.JobStatusRunning {
+		t.Fatalf("expected overwritten job status %q, got %q", domain.JobStatusRunning, loaded.Status)
+	}
+}
+
+func TestStateStoreSaveJobRetriesTransientReaderLock(t *testing.T) {
+	t.Parallel()
+
+	state := NewStateStore(t.TempDir())
+	job := &domain.Job{
+		ID:        "job-reader-lock",
+		Status:    domain.JobStatusStarting,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	if err := state.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveJob first write returned error: %v", err)
+	}
+
+	reader, err := os.Open(state.jobPath(job.ID))
+	if err != nil {
+		t.Fatalf("failed to open job file for reading: %v", err)
+	}
+
+	job.Status = domain.JobStatusRunning
+	job.UpdatedAt = time.Now().UTC()
+
+	saveDone := make(chan error, 1)
+	go func() {
+		saveDone <- state.SaveJob(context.Background(), job)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := reader.Close(); err != nil {
+		t.Fatalf("failed to close reader: %v", err)
+	}
+
+	select {
+	case err := <-saveDone:
+		if err != nil {
+			t.Fatalf("SaveJob overwrite returned error after transient reader lock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SaveJob overwrite to finish")
 	}
 
 	loaded, err := state.LoadJob(context.Background(), job.ID)

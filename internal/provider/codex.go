@@ -94,21 +94,13 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 	// --skip-git-repo-check is needed because the workspace may not be a git repo.
 	// Prompt is fed via stdin ("-") to avoid Windows command-line length limits
 	// and to prevent JSON payload characters from being misinterpreted by the shell.
-	args := []string{
-		"exec",
-		"--fresh",
-		"--skip-git-repo-check",
-		"-s", "workspace-write",
-		"--output-schema", schemaPath,
-		"-o", outputPath,
-		"-C", firstNonEmpty(workspaceDir, "."),
-		"-", // read prompt from stdin
-	}
-	if model = strings.TrimSpace(model); model != "" && isCodexModel(model) {
-		args = append(args, "--model", model)
-	}
 	if executable := a.executable; executable != "" {
+		args := buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, "--ephemeral")
 		result, err := a.runCommand(ctx, executable, a.runTime, workspaceDir, nil, prompt, args...)
+		if err != nil && shouldRetryCodexWithFresh(err) {
+			args = buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, "--fresh")
+			result, err = a.runCommand(ctx, executable, a.runTime, workspaceDir, nil, prompt, args...)
+		}
 		if err != nil {
 			return "", classifyCommandError(a.Name(), executable, result, err)
 		}
@@ -119,6 +111,32 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 		return string(data), nil
 	}
 	return "", invalidResponseError(a.Name(), a.executable, "missing codex executable", nil)
+}
+
+func buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, sessionFlag string) []string {
+	args := []string{
+		"exec",
+		sessionFlag,
+		"--skip-git-repo-check",
+		"-s", "workspace-write",
+		"--output-schema", schemaPath,
+		"-o", outputPath,
+		"-C", firstNonEmpty(workspaceDir, "."),
+		"-", // read prompt from stdin
+	}
+	if model = strings.TrimSpace(model); model != "" && isCodexModel(model) {
+		args = append(args, "--model", model)
+	}
+	return args
+}
+
+func shouldRetryCodexWithFresh(err error) bool {
+	if err == nil {
+		return false
+	}
+	normalized := strings.ToLower(err.Error())
+	return strings.Contains(normalized, "unexpected argument '--ephemeral'") ||
+		strings.Contains(normalized, "unknown option '--ephemeral'")
 }
 
 func envOrDefault(key, fallback string) string {

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gorchera/internal/domain"
 )
@@ -180,24 +181,42 @@ func writeAtomically(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
+	tmp := tmpFile.Name()
 	defer os.Remove(tmp)
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
 
 	if err := os.Rename(tmp, path); err == nil {
 		return nil
 	} else {
-
 		// Windows does not replace an existing destination with os.Rename.
 		// Fall back to remove-then-rename when the target already exists.
+		// Retry briefly so concurrent readers do not fail the overwrite.
 		if _, statErr := os.Stat(path); statErr != nil {
 			return err
 		}
-		if removeErr := os.Remove(path); removeErr != nil {
-			return removeErr
+
+		lastErr := err
+		for attempt := 0; attempt < 20; attempt++ {
+			if removeErr := os.Remove(path); removeErr != nil {
+				lastErr = removeErr
+			} else if renameErr := os.Rename(tmp, path); renameErr == nil {
+				return nil
+			} else {
+				lastErr = renameErr
+			}
+
+			time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
 		}
-		return os.Rename(tmp, path)
+		return lastErr
 	}
 }

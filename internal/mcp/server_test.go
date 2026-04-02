@@ -624,6 +624,7 @@ func newTestServer(t *testing.T, adapters ...provider.Adapter) (*Server, *orches
 		store.NewArtifactStore(filepath.Join(root, "artifacts")),
 		root,
 	)
+	t.Cleanup(service.Shutdown)
 
 	return NewServer(service), service, root
 }

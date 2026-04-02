@@ -191,11 +191,13 @@ Resolution path in `SessionManager`:
 2. If the role profile omits `provider`, fall back to `job.Provider`
 3. If still empty, fall back to `mock`
 4. If the selected provider is unavailable and `fallback_provider` is set, use the fallback provider
+5. If the selected adapter returns a provider command error before any structured payload is produced, and `fallback_model` is non-empty and differs from the primary model, retry exactly once on the same adapter with `fallback_model`
 
 Adapter-specific model behavior:
 - Claude passes the selected `profile.Model` through `--model`
 - Codex passes `--model` only when the model name looks like a GPT-family Codex model; Claude shorthand values such as `opus` and `sonnet` are intentionally suppressed
 - Codex adapter always passes `--fresh` to prevent session reuse and reduce hang probability
+- The `fallback_model` retry is runtime-only; it does not change provider lookup and does not fan out into multiple fallback attempts
 
 Role overrides on chains:
 - Each `ChainGoal` carries `RoleOverrides map[string]RoleProfile` alongside its other per-goal fields.
@@ -204,10 +206,14 @@ Role overrides on chains:
 - Resolution priority inside the job: `RoleOverrides[role]` > `RoleProfiles[role]` > job provider > mock fallback.
 
 Stored but not fully enforced yet:
-- `fallback_model`
 - `effort`
 - `tool_policy`
 - `max_budget_usd`
+
+Current fallback-model limits:
+- Only one same-provider retry is allowed
+- Blank or model-equal `fallback_model` values are treated as disabled
+- Invalid structured output, schema failures, and provider lookup failures do not trigger the model fallback path
 
 ## Structured Errors
 

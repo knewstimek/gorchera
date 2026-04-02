@@ -734,6 +734,9 @@ func TestCodexAdapterAddsModelFlagForGPTRoleProfiles(t *testing.T) {
 			if out == "" {
 				t.Fatalf("expected %s output", tc.name)
 			}
+			if !containsArg(capturedArgs, "--ephemeral") {
+				t.Fatalf("expected %s args to include --ephemeral, got %v", tc.name, capturedArgs)
+			}
 			assertCodexModelFlag(t, capturedArgs, "gpt-5.4")
 		})
 	}
@@ -881,8 +884,76 @@ func TestCodexAdapterSuppressesModelFlagForClaudeShorthandAndEmptyModels(t *test
 			if out == "" {
 				t.Fatal("expected leader output")
 			}
+			if !containsArg(capturedArgs, "--ephemeral") {
+				t.Fatalf("expected args to include --ephemeral, got %v", capturedArgs)
+			}
 			assertCodexModelFlagAbsent(t, capturedArgs)
 		})
+	}
+}
+
+func TestCodexAdapterFallsBackToFreshForLegacyCLI(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	var invocations [][]string
+	adapter := &CodexAdapter{
+		executable: "go",
+		probeArgs:  []string{"version"},
+		probeTime:  2 * time.Second,
+		runTime:    2 * time.Second,
+		runCommand: func(_ context.Context, _ string, _ time.Duration, _ string, _ []string, _ string, args ...string) (CommandResult, error) {
+			invocations = append(invocations, append([]string(nil), args...))
+
+			if containsArg(args, "--ephemeral") {
+				return CommandResult{}, errors.New("error: unexpected argument '--ephemeral' found")
+			}
+			if !containsArg(args, "--fresh") {
+				return CommandResult{}, errors.New("expected fallback invocation to include --fresh")
+			}
+
+			outputPath := ""
+			for i := 0; i < len(args)-1; i++ {
+				if args[i] == "-o" {
+					outputPath = args[i+1]
+					break
+				}
+			}
+			if outputPath == "" {
+				return CommandResult{}, errors.New("missing output path")
+			}
+			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+				return CommandResult{}, err
+			}
+			if err := os.WriteFile(outputPath, []byte(`{"action":"complete","target":"none","task_type":"none","reason":"legacy codex accepted fallback"}`), 0o644); err != nil {
+				return CommandResult{}, err
+			}
+			return CommandResult{}, nil
+		},
+	}
+
+	out, err := adapter.RunLeader(context.Background(), domain.Job{
+		Goal:         "Support legacy codex sessions",
+		WorkspaceDir: root,
+		Provider:     domain.ProviderCodex,
+		RoleProfiles: domain.RoleProfiles{
+			Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected fallback run to succeed, got error: %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected leader output")
+	}
+	if len(invocations) != 2 {
+		t.Fatalf("expected 2 codex invocations, got %d", len(invocations))
+	}
+	if !containsArg(invocations[0], "--ephemeral") {
+		t.Fatalf("expected first invocation to include --ephemeral, got %v", invocations[0])
+	}
+	if !containsArg(invocations[1], "--fresh") {
+		t.Fatalf("expected second invocation to include --fresh, got %v", invocations[1])
 	}
 }
 
@@ -1222,11 +1293,88 @@ func TestSessionManagerReportsUnsupportedPlannerPhase(t *testing.T) {
 	}
 }
 
+func TestSessionManagerRetriesFallbackModelOnceOnPreStructuredFailure(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	adapter := &fallbackModelRetryAdapter{name: domain.ProviderName("model-retry")}
+	registry.Register(adapter)
+
+	manager := NewSessionManager(registry)
+	out, err := manager.RunLeader(context.Background(), domain.Job{
+		Provider: domain.ProviderName("unused-primary"),
+		RoleProfiles: domain.RoleProfiles{
+			Leader: domain.ExecutionProfile{
+				Provider:      adapter.name,
+				Model:         "primary-model",
+				FallbackModel: "fallback-model",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected fallback model retry to succeed, got error: %v", err)
+	}
+	if out != "model-retry:leader:fallback-model" {
+		t.Fatalf("unexpected fallback model output: %s", out)
+	}
+	if adapter.calls != 2 {
+		t.Fatalf("expected exactly 2 invocations, got %d", adapter.calls)
+	}
+	if len(adapter.models) != 2 || adapter.models[0] != "primary-model" || adapter.models[1] != "fallback-model" {
+		t.Fatalf("expected retry models [primary-model fallback-model], got %v", adapter.models)
+	}
+}
+
+func TestSessionManagerDoesNotRetryFallbackModelWhenBlankOrEqual(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		fallbackModel string
+	}{
+		{name: "blank", fallbackModel: ""},
+		{name: "equal", fallbackModel: "primary-model"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry := NewRegistry()
+			adapter := &alwaysFailingLeaderAdapter{name: domain.ProviderName("no-retry")}
+			registry.Register(adapter)
+
+			manager := NewSessionManager(registry)
+			_, err := manager.RunLeader(context.Background(), domain.Job{
+				Provider: domain.ProviderName("unused-primary"),
+				RoleProfiles: domain.RoleProfiles{
+					Leader: domain.ExecutionProfile{
+						Provider:      adapter.name,
+						Model:         "primary-model",
+						FallbackModel: tc.fallbackModel,
+					},
+				},
+			})
+			if err == nil {
+				t.Fatal("expected provider error")
+			}
+			if adapter.calls != 1 {
+				t.Fatalf("expected exactly 1 invocation, got %d", adapter.calls)
+			}
+			if len(adapter.models) != 1 || adapter.models[0] != "primary-model" {
+				t.Fatalf("expected only primary model attempt, got %v", adapter.models)
+			}
+		})
+	}
+}
+
 func TestSessionManagerFallsBackToSecondaryProvider(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	registry.Register(fallbackLeaderAdapter{name: domain.ProviderName("role-fallback")})
+	adapter := &fallbackLeaderAdapter{name: domain.ProviderName("role-fallback")}
+	registry.Register(adapter)
 
 	manager := NewSessionManager(registry)
 	out, err := manager.RunLeader(context.Background(), domain.Job{
@@ -1235,6 +1383,7 @@ func TestSessionManagerFallsBackToSecondaryProvider(t *testing.T) {
 			Leader: domain.ExecutionProfile{
 				Provider:         domain.ProviderName("missing-primary"),
 				FallbackProvider: domain.ProviderName("role-fallback"),
+				FallbackModel:    "unused-fallback-model",
 			},
 		},
 	})
@@ -1243,6 +1392,9 @@ func TestSessionManagerFallsBackToSecondaryProvider(t *testing.T) {
 	}
 	if out != `{"action":"complete","target":"none","task_type":"none","reason":"fallback used"}` {
 		t.Fatalf("unexpected fallback output: %s", out)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("expected fallback provider to run once, got %d calls", adapter.calls)
 	}
 }
 
@@ -1263,19 +1415,66 @@ func (a leaderOnlyAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.L
 }
 
 type fallbackLeaderAdapter struct {
-	name domain.ProviderName
+	name  domain.ProviderName
+	calls int
 }
 
-func (a fallbackLeaderAdapter) Name() domain.ProviderName {
+func (a *fallbackLeaderAdapter) Name() domain.ProviderName {
 	return a.name
 }
 
-func (a fallbackLeaderAdapter) RunLeader(_ context.Context, _ domain.Job) (string, error) {
+func (a *fallbackLeaderAdapter) RunLeader(_ context.Context, _ domain.Job) (string, error) {
+	a.calls++
 	return `{"action":"complete","target":"none","task_type":"none","reason":"fallback used"}`, nil
 }
 
-func (a fallbackLeaderAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
+func (a *fallbackLeaderAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
 	return `{"status":"success","summary":"fallback worker"}`, nil
+}
+
+type fallbackModelRetryAdapter struct {
+	name   domain.ProviderName
+	calls  int
+	models []string
+}
+
+func (a *fallbackModelRetryAdapter) Name() domain.ProviderName {
+	return a.name
+}
+
+func (a *fallbackModelRetryAdapter) RunLeader(_ context.Context, job domain.Job) (string, error) {
+	a.calls++
+	profile := job.RoleProfiles.ProfileFor(domain.RoleLeader, job.Provider)
+	a.models = append(a.models, profile.Model)
+	if a.calls == 1 {
+		return "", commandFailedError(a.name, "test-provider", errors.New("primary model failed"))
+	}
+	return fmt.Sprintf("%s:leader:%s", a.name, profile.Model), nil
+}
+
+func (a *fallbackModelRetryAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
+	return `{"status":"success","summary":"fallback model worker"}`, nil
+}
+
+type alwaysFailingLeaderAdapter struct {
+	name   domain.ProviderName
+	calls  int
+	models []string
+}
+
+func (a *alwaysFailingLeaderAdapter) Name() domain.ProviderName {
+	return a.name
+}
+
+func (a *alwaysFailingLeaderAdapter) RunLeader(_ context.Context, job domain.Job) (string, error) {
+	a.calls++
+	profile := job.RoleProfiles.ProfileFor(domain.RoleLeader, job.Provider)
+	a.models = append(a.models, profile.Model)
+	return "", commandFailedError(a.name, "test-provider", errors.New("command failed"))
+}
+
+func (a *alwaysFailingLeaderAdapter) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
+	return `{"status":"success","summary":"always failing worker"}`, nil
 }
 
 type roleTrackingAdapter struct {

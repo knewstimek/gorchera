@@ -645,10 +645,10 @@ func TestServerCreatesJobFromAPI(t *testing.T) {
 		Goal:     "Create a profile-driven job",
 		Provider: domain.ProviderMock,
 		RoleProfiles: domain.RoleProfiles{
-			Leader:   domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "leader-model"},
+			Leader:   domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "leader-model", FallbackModel: "leader-fallback-model"},
 			Executor: domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "executor-model"},
 			Reviewer: domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "review-model"},
-			Tester:   domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "test-model"},
+			Tester:   domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "test-model", FallbackModel: "test-fallback-model"},
 		},
 		MaxSteps: 8,
 	}
@@ -673,8 +673,31 @@ func TestServerCreatesJobFromAPI(t *testing.T) {
 	if job.RoleProfiles.Leader.Model != "leader-model" {
 		t.Fatalf("expected leader model to persist, got %q", job.RoleProfiles.Leader.Model)
 	}
+	if job.RoleProfiles.Leader.FallbackModel != "leader-fallback-model" {
+		t.Fatalf("expected leader fallback model to persist, got %q", job.RoleProfiles.Leader.FallbackModel)
+	}
 	if job.RoleProfiles.Executor.Model != "executor-model" {
 		t.Fatalf("expected executor model to persist, got %q", job.RoleProfiles.Executor.Model)
+	}
+
+	profileResp, err := http.Get(server.URL + "/jobs/" + job.ID + "/profile")
+	if err != nil {
+		t.Fatalf("profile request failed: %v", err)
+	}
+	defer profileResp.Body.Close()
+	if profileResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /jobs/{id}/profile, got %d", profileResp.StatusCode)
+	}
+
+	var profile api.ProfileView
+	if err := json.NewDecoder(profileResp.Body).Decode(&profile); err != nil {
+		t.Fatalf("failed to decode profile response: %v", err)
+	}
+	if profile.RoleProfiles == nil {
+		t.Fatal("expected role profiles in profile response")
+	}
+	if profile.RoleProfiles.Tester.FallbackModel != "test-fallback-model" {
+		t.Fatalf("expected tester fallback model to persist in profile view, got %q", profile.RoleProfiles.Tester.FallbackModel)
 	}
 }
 

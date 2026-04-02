@@ -59,7 +59,7 @@ go test ./...    # PASS
 - Real Codex CLI adapter:
   - `codex exec`
   - `--output-schema`
-  - `--fresh` flag (always passed to prevent session reuse and reduce hang probability)
+  - prefers `--ephemeral` for current Codex CLI builds and falls back to `--fresh` for legacy builds
   - workspace-write sandbox
   - stdin prompt delivery
   - role-specific GPT-family model selection
@@ -71,6 +71,11 @@ go test ./...    # PASS
   - `mock` fallback last
 - MCP `gorchera_start_job` now accepts a structured `role_overrides` object with per-role `provider` / `model` overrides and persists it onto the started job.
 - `fallback_provider` is honored if the primary provider lookup fails.
+- `fallback_model` is honored narrowly at runtime:
+  - exactly one retry on the already-selected provider adapter
+  - only after a provider command failure occurs before any structured response is produced
+  - disabled when blank or equal to the primary model
+  - does not replace `fallback_provider` lookup or retry invalid structured output
 
 ### Structured provider errors and retry behavior
 
@@ -193,7 +198,8 @@ All 10 HIGH severity findings from `docs/AUDIT_REPORT.md` have been fixed. `go b
 
 ## Partially Implemented Or Intentionally Limited
 
-- Execution-profile fields `effort`, `tool_policy`, `fallback_model`, and `max_budget_usd` are stored in domain types but are not enforced by the orchestrator. The currently active fields are `provider`, `model`, and `fallback_provider`.
+- Execution-profile fields `effort`, `tool_policy`, and `max_budget_usd` are stored in domain types but are not enforced by the orchestrator.
+- `fallback_model` is intentionally narrow: one same-provider retry only, and only for pre-structured provider command failures.
 - HTTP `POST /jobs` accepts role profiles and max steps, but it does not expose `strictness_level` or `context_mode`.
 - CLI `run` exposes `strictness` but does not expose `context_mode`.
 - Chain lifecycle is exposed through MCP and service methods, but not through CLI or HTTP routes.
@@ -218,7 +224,7 @@ All 10 HIGH severity findings from `docs/AUDIT_REPORT.md` have been fixed. `go b
 
 ## Current Risk Notes
 
-- The workspace is already dirty outside this docs task. Pre-existing Go file modifications are present in the repository, so verification must distinguish this task's docs-only edits from unrelated local changes.
-- Provider fallback is provider-aware but not model-aware. `fallback_model` is currently configuration-only.
+- The workspace is already dirty outside this docs task. Pre-existing Go file modifications are present in the repository, so verification must distinguish this task's changes from unrelated local edits.
+- Provider fallback is only partially model-aware. `fallback_model` now covers one same-provider retry for pre-structured command failures, but it does not recover invalid structured output or support multi-hop fallback chains.
 - Token counts are still heuristic-only, so totals remain approximate even though pricing is now model-aware.
 - The prompt contract still tells workers to use shell commands for file creation, but repository editing policy for this project is enforced outside the runtime prompt by the orchestrator workflow and code review, not by a separate worker sandbox contract inside Go code.

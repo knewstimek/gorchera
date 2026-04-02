@@ -54,6 +54,9 @@ Selection:
 - Provider resolution is role-specific.
 - Use `SessionManager.resolveProfile()` / `resolveAdapter()` instead of re-implementing fallback logic.
 - `fallback_provider` is resolved in `adapterForProfile()`.
+- `fallback_model` retry logic belongs in `SessionManager`, not inside individual adapters or orchestrator state transitions.
+- `fallback_model` may trigger at most one retry on the same already-selected adapter, and only for provider command failures that happen before any structured response is produced.
+- Blank or model-equal `fallback_model` values must behave as disabled.
 
 Model handling:
 - Claude consumes the selected model directly.
