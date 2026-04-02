@@ -25,9 +25,10 @@ go test ./...    # PASS
 - Role-specific worker prompts are differentiated:
   - executor: implementation-focused
   - reviewer: adversarial review focused on counterexamples, regressions, lifecycle/restart/retry/recovery/idempotency issues, and state-transition safety
+  - audit: routed through the reviewer role with the same adversarial prompt family, but constrained to risk discovery and contract validation
   - tester: verification-focused with executable evidence preferred over narrative claims
 - Evaluator prompt is gate-oriented and no longer treats a single succeeded implement step as sufficient evidence by itself.
-- Leader prompt includes a conditional high-risk review trigger before completion for lifecycle/concurrency/deduplication/external-pricing/auth/UI-event-boundary changes.
+- Leader prompt includes a conditional high-risk review/audit trigger before completion for lifecycle/concurrency/deduplication/external-pricing/auth/UI-event-boundary changes.
 - Leader summarize throttling: after two consecutive summarize turns, the service forces completion evaluation instead of allowing endless summary churn.
 - Repeated blocked-reason protection: the same blocked reason three times in a row escalates to job failure.
 - Startup recovery hardening:

@@ -75,6 +75,12 @@ Error handling:
 Leader context:
 - `ContextMode` must stay normalized to `full`, `summary`, or `minimal`.
 - Supervisor directives must remain a separate prompt section, not duplicated inside serialized job payloads.
+- Keep prompt guidance abstract and failure-mode oriented. Encode categories like contract violations, lifecycle/retry/recovery safety, duplicate execution, contradictory evidence, and external contract drift rather than project-specific bug examples.
+- Role prompts should stay distinct:
+  - executor: implementation
+  - reviewer/audit: adversarial counterexample and invariant checking
+  - tester: executable verification
+  - evaluator: completion gate, not implementation cheerleading
 
 ## Verification Contract Rules
 

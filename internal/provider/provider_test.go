@@ -1012,6 +1012,27 @@ func TestReviewerPromptUsesAdversarialGuidance(t *testing.T) {
 	}
 }
 
+func TestAuditTaskUsesReviewerPromptBranch(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildWorkerPrompt(domain.Job{
+		Goal:     "Check restart and retry safety",
+		Provider: domain.ProviderMock,
+	}, domain.LeaderOutput{
+		Action:   "run_worker",
+		Target:   "C",
+		TaskType: "audit",
+		TaskText: "Audit lifecycle and retry invariants for hidden regressions",
+	})
+
+	if !strings.Contains(prompt, "Assigned audit task") {
+		t.Fatal("expected audit task to use reviewer/audit prompt branch")
+	}
+	if !strings.Contains(prompt, "risk discovery and contract validation") {
+		t.Fatal("expected audit prompt to stay risk-focused")
+	}
+}
+
 func TestLeaderPromptIncludesRunWorkersGuidance(t *testing.T) {
 	t.Parallel()
 
@@ -1028,6 +1049,9 @@ func TestLeaderPromptIncludesRunWorkersGuidance(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "dispatch an explicit review step") {
 		t.Fatal("expected leader prompt to include conditional audit guidance")
+	}
+	if !strings.Contains(prompt, `"audit"`) {
+		t.Fatal("expected leader prompt to mention audit task type")
 	}
 }
 

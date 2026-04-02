@@ -344,7 +344,7 @@ IMPORTANT: Use run_worker (not run_system) for file creation, code writing, and 
 Workers can create files, write code, and perform shell actions in the workspace.
 run_system is for build/lint/test/search commands only: allowed executables are go, rg, grep, cargo, make, npm.
 
-For run_worker: set action="run_worker", target=one of "B"/"C"/"D", task_type=one of "implement"/"review"/"test"/"search"/"build"/"lint"/"command", task_text=full description of what to do
+For run_worker: set action="run_worker", target=one of "B"/"C"/"D", task_type=one of "implement"/"review"/"audit"/"test"/"search"/"build"/"lint"/"command", task_text=full description of what to do
 For run_workers: set action="run_workers", tasks=array of exactly 2 task objects with distinct targets
 For run_system: set action="run_system", target="SYS", task_type=one of "build"/"test"/"lint"/"search"/"command", system_action.command=single allowed executable, system_action.args=array
 For summarize: set action="summarize", reason=summary text
@@ -530,15 +530,19 @@ func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
 	// explicit and testable instead of relying on task_text phrasing alone.
 	switch domain.RoleForTaskType(task.TaskType) {
 	case domain.RoleReviewer:
+		reviewerLabel := "review"
+		if strings.EqualFold(strings.TrimSpace(task.TaskType), "audit") {
+			reviewerLabel = "audit"
+		}
 		return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are a reviewer component assigned by the leader. You are not the primary implementer for this step. Your job is to challenge the proposed change, look for counterexamples, and surface concrete risks before the job is allowed to complete.
-The assigned review task below is complete and ready to execute. Do it now -- do not ask for input.
+The assigned %s task below is complete and ready to execute. Do it now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 status MUST be one of: success, failed, blocked.
 
 Overall job goal: %s
 
-Assigned review task:
+Assigned %s task:
 %s
 
 Review procedure:
@@ -546,6 +550,7 @@ Review procedure:
 - Check input/output contracts, invariants, edge cases, and whether the task actually satisfies the goal.
 - Explicitly look for lifecycle, restart, retry, recovery, idempotency, duplicate-execution, and state-transition issues when relevant.
 - Look for missing validation, hidden regressions, and contradictions between artifacts, summaries, and actual code.
+- For audit tasks, stay focused on risk discovery and contract validation; do not expand scope into unrelated implementation.
 - Report success only when you cannot find a material defect in the reviewed scope.
 - Report failed when you find a concrete bug, regression, unsafe assumption, or missing required evidence.
 - Report blocked only when the evidence needed for a real review is missing.
@@ -555,7 +560,7 @@ Job state:
 
 Verification contract:
 %s
-`, job.Goal, string(taskPayload), string(jobPayload), contractPayload))
+`, reviewerLabel, job.Goal, reviewerLabel, string(taskPayload), string(jobPayload), contractPayload))
 	case domain.RoleTester:
 		return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are a tester component assigned by the leader. Your job is to verify behavior, challenge assumptions with runnable checks, and report whether the requested outcome is actually demonstrated.

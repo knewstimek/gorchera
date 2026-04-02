@@ -124,7 +124,7 @@ func (p ExecutionProfile) withFallback(base ProviderName) ExecutionProfile {
 
 func RoleForTaskType(taskType string) RoleName {
 	switch strings.ToLower(strings.TrimSpace(taskType)) {
-	case "review":
+	case "review", "audit":
 		return RoleReviewer
 	case "test":
 		return RoleTester
@@ -211,10 +211,10 @@ func ValidChainStatus(status ChainStatus) bool {
 }
 
 type ChainGoal struct {
-	Goal            string       `json:"goal"`
-	Provider        ProviderName `json:"provider"`
-	StrictnessLevel string       `json:"strictness_level,omitempty"`
-	ContextMode     string       `json:"context_mode,omitempty"`
+	Goal            string                 `json:"goal"`
+	Provider        ProviderName           `json:"provider"`
+	StrictnessLevel string                 `json:"strictness_level,omitempty"`
+	ContextMode     string                 `json:"context_mode,omitempty"`
 	MaxSteps        int                    `json:"max_steps"`
 	RoleOverrides   map[string]RoleProfile `json:"role_overrides,omitempty"`
 	JobID           string                 `json:"job_id,omitempty"`
@@ -231,15 +231,15 @@ type JobChain struct {
 }
 
 type PlanningArtifact struct {
-	Goal                 string                `json:"goal"`
-	TechStack            string                `json:"tech_stack,omitempty"`
-	WorkspaceDir         string                `json:"workspace_dir,omitempty"`
-	Summary              string                `json:"summary"`
-	ProductScope         []string              `json:"product_scope,omitempty"`
-	NonGoals             []string              `json:"non_goals,omitempty"`
-	ProposedSteps        []string              `json:"proposed_steps,omitempty"`
-	Acceptance           []string              `json:"acceptance,omitempty"`
-	SuccessSignals       []string              `json:"success_signals,omitempty"`
+	Goal                  string                `json:"goal"`
+	TechStack             string                `json:"tech_stack,omitempty"`
+	WorkspaceDir          string                `json:"workspace_dir,omitempty"`
+	Summary               string                `json:"summary"`
+	ProductScope          []string              `json:"product_scope,omitempty"`
+	NonGoals              []string              `json:"non_goals,omitempty"`
+	ProposedSteps         []string              `json:"proposed_steps,omitempty"`
+	Acceptance            []string              `json:"acceptance,omitempty"`
+	SuccessSignals        []string              `json:"success_signals,omitempty"`
 	VerificationContract  *VerificationContract `json:"verification_contract,omitempty"`
 	RecommendedStrictness string                `json:"recommended_strictness,omitempty"`
 	RecommendedMaxSteps   int                   `json:"recommended_max_steps,omitempty"`
@@ -391,7 +391,7 @@ type Job struct {
 	EvaluatorReportRef      string                 `json:"evaluator_report_ref,omitempty"`
 	ChainID                 string                 `json:"chain_id,omitempty"`
 	ChainGoalIndex          int                    `json:"chain_goal_index,omitempty"`
-	ChainContext            *ChainContext           `json:"chain_context,omitempty"`
+	ChainContext            *ChainContext          `json:"chain_context,omitempty"`
 	Status                  JobStatus              `json:"status"`
 	Provider                ProviderName           `json:"provider"`
 	MaxSteps                int                    `json:"max_steps"`
