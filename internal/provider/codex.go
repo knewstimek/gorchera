@@ -37,28 +37,32 @@ func (a *CodexAdapter) RunLeader(ctx context.Context, job domain.Job) (string, e
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildLeaderPrompt(job), leaderSchema(), job.RoleProfiles.ProfileFor(domain.RoleLeader, job.Provider).Model)
+	profile := job.RoleProfiles.ProfileFor(domain.RoleLeader, job.Provider)
+	return a.runStructured(ctx, job.WorkspaceDir, buildLeaderPrompt(job), leaderSchema(), profile.Model, profile.Effort)
 }
 
 func (a *CodexAdapter) RunPlanner(ctx context.Context, job domain.Job) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildPlannerPrompt(job), plannerSchema(), job.RoleProfiles.ProfileFor(domain.RolePlanner, job.Provider).Model)
+	profile := job.RoleProfiles.ProfileFor(domain.RolePlanner, job.Provider)
+	return a.runStructured(ctx, job.WorkspaceDir, buildPlannerPrompt(job), plannerSchema(), profile.Model, profile.Effort)
 }
 
 func (a *CodexAdapter) RunEvaluator(ctx context.Context, job domain.Job) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildEvaluatorPrompt(job), evaluatorSchema(), job.RoleProfiles.ProfileFor(domain.RoleEvaluator, job.Provider).Model)
+	profile := job.RoleProfiles.ProfileFor(domain.RoleEvaluator, job.Provider)
+	return a.runStructured(ctx, job.WorkspaceDir, buildEvaluatorPrompt(job), evaluatorSchema(), profile.Model, profile.Effort)
 }
 
 func (a *CodexAdapter) RunWorker(ctx context.Context, job domain.Job, task domain.LeaderOutput) (string, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return "", err
 	}
-	return a.runStructured(ctx, job.WorkspaceDir, buildWorkerPrompt(job, task), workerSchema(), job.RoleProfiles.ProfileFor(domain.RoleForTaskType(task.TaskType), job.Provider).Model)
+	profile := job.RoleProfiles.ProfileFor(domain.RoleForTaskType(task.TaskType), job.Provider)
+	return a.runStructured(ctx, job.WorkspaceDir, buildWorkerPrompt(job, task), workerSchema(), profile.Model, profile.Effort)
 }
 
 func (a *CodexAdapter) ensureReady(ctx context.Context) error {
@@ -75,7 +79,7 @@ func (a *CodexAdapter) ensureReady(ctx context.Context) error {
 	return nil
 }
 
-func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, schema, model string) (string, error) {
+func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, schema, model, effort string) (string, error) {
 	schemaPath, err := writeSchemaFile(workspaceDir, "schema.json", schema)
 	if err != nil {
 		return "", invalidResponseError(a.Name(), a.executable, "failed to write schema file", err)
@@ -95,10 +99,10 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 	// Prompt is fed via stdin ("-") to avoid Windows command-line length limits
 	// and to prevent JSON payload characters from being misinterpreted by the shell.
 	if executable := a.executable; executable != "" {
-		args := buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, "--ephemeral")
+		args := buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, effort, "--ephemeral")
 		result, err := a.runCommand(ctx, executable, a.runTime, workspaceDir, nil, prompt, args...)
 		if err != nil && shouldRetryCodexWithFresh(err) {
-			args = buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, "--fresh")
+			args = buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, effort, "--fresh")
 			result, err = a.runCommand(ctx, executable, a.runTime, workspaceDir, nil, prompt, args...)
 		}
 		if err != nil {
@@ -113,7 +117,7 @@ func (a *CodexAdapter) runStructured(ctx context.Context, workspaceDir, prompt, 
 	return "", invalidResponseError(a.Name(), a.executable, "missing codex executable", nil)
 }
 
-func buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, sessionFlag string) []string {
+func buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, effort, sessionFlag string) []string {
 	args := []string{
 		"exec",
 		sessionFlag,
@@ -126,6 +130,9 @@ func buildCodexExecArgs(workspaceDir, schemaPath, outputPath, model, sessionFlag
 	}
 	if model = strings.TrimSpace(model); model != "" && isCodexModel(model) {
 		args = append(args, "--model", model)
+	}
+	if effort = strings.TrimSpace(effort); effort != "" {
+		args = append(args, "--effort", effort)
 	}
 	return args
 }

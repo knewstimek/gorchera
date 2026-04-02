@@ -742,6 +742,113 @@ func TestCodexAdapterAddsModelFlagForGPTRoleProfiles(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterAddsEffortFlagForRoleProfiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		wantEffort string
+		job        func(string, string) domain.Job
+		invoke     func(*CodexAdapter, domain.Job) (string, error)
+	}{
+		{
+			name:       "leader",
+			wantEffort: "high",
+			job: func(root, effort string) domain.Job {
+				return domain.Job{
+					Goal:         "Leader uses codex effort",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: effort},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunLeader(context.Background(), job)
+			},
+		},
+		{
+			name:       "planner",
+			wantEffort: "medium",
+			job: func(root, effort string) domain.Job {
+				return domain.Job{
+					Goal:         "Planner uses codex effort",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Planner: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: effort},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunPlanner(context.Background(), job)
+			},
+		},
+		{
+			name:       "evaluator",
+			wantEffort: "high",
+			job: func(root, effort string) domain.Job {
+				return domain.Job{
+					Goal:         "Evaluator uses codex effort",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Evaluator: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: effort},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunEvaluator(context.Background(), job)
+			},
+		},
+		{
+			name:       "worker",
+			wantEffort: "low",
+			job: func(root, effort string) domain.Job {
+				return domain.Job{
+					Goal:         "Worker uses codex effort",
+					WorkspaceDir: root,
+					Provider:     domain.ProviderCodex,
+					RoleProfiles: domain.RoleProfiles{
+						Executor: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: effort},
+					},
+				}
+			},
+			invoke: func(adapter *CodexAdapter, job domain.Job) (string, error) {
+				return adapter.RunWorker(context.Background(), job, domain.LeaderOutput{
+					Action:   "run_worker",
+					Target:   "B",
+					TaskType: "implement",
+					TaskText: "execute work",
+				})
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			var capturedArgs []string
+			adapter := newTestCodexAdapter(t, func(_ string, args []string) {
+				capturedArgs = append([]string(nil), args...)
+			})
+
+			out, err := tc.invoke(adapter, tc.job(root, tc.wantEffort))
+			if err != nil {
+				t.Fatalf("expected %s run to succeed, got error: %v", tc.name, err)
+			}
+			if out == "" {
+				t.Fatalf("expected %s output", tc.name)
+			}
+			assertCodexEffortFlag(t, capturedArgs, tc.wantEffort)
+		})
+	}
+}
+
 func TestClaudeAdapterBuildsCLIArgsAndModelFlagForRoleProfiles(t *testing.T) {
 	t.Parallel()
 
@@ -892,6 +999,39 @@ func TestCodexAdapterSuppressesModelFlagForClaudeShorthandAndEmptyModels(t *test
 	}
 }
 
+func TestCodexAdapterSuppressesEffortFlagForEmptyAndWhitespaceProfiles(t *testing.T) {
+	t.Parallel()
+
+	for _, effort := range []string{"", " ", "\t  "} {
+		effort := effort
+		t.Run(fmt.Sprintf("%q", effort), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			var capturedArgs []string
+			adapter := newTestCodexAdapter(t, func(_ string, args []string) {
+				capturedArgs = append([]string(nil), args...)
+			})
+
+			out, err := adapter.RunLeader(context.Background(), domain.Job{
+				Goal:         "Suppress codex effort flag",
+				WorkspaceDir: root,
+				Provider:     domain.ProviderCodex,
+				RoleProfiles: domain.RoleProfiles{
+					Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: effort},
+				},
+			})
+			if err != nil {
+				t.Fatalf("expected leader run to succeed, got error: %v", err)
+			}
+			if out == "" {
+				t.Fatal("expected leader output")
+			}
+			assertCodexEffortFlagAbsent(t, capturedArgs)
+		})
+	}
+}
+
 func TestCodexAdapterFallsBackToFreshForLegacyCLI(t *testing.T) {
 	t.Parallel()
 
@@ -937,7 +1077,7 @@ func TestCodexAdapterFallsBackToFreshForLegacyCLI(t *testing.T) {
 		WorkspaceDir: root,
 		Provider:     domain.ProviderCodex,
 		RoleProfiles: domain.RoleProfiles{
-			Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4"},
+			Leader: domain.ExecutionProfile{Provider: domain.ProviderCodex, Model: "gpt-5.4", Effort: "medium"},
 		},
 	})
 	if err != nil {
@@ -955,6 +1095,8 @@ func TestCodexAdapterFallsBackToFreshForLegacyCLI(t *testing.T) {
 	if !containsArg(invocations[1], "--fresh") {
 		t.Fatalf("expected second invocation to include --fresh, got %v", invocations[1])
 	}
+	assertCodexEffortFlag(t, invocations[0], "medium")
+	assertCodexEffortFlag(t, invocations[1], "medium")
 }
 
 func TestIsCodexModel(t *testing.T) {
@@ -1727,6 +1869,30 @@ func assertCodexModelFlagAbsent(t *testing.T, args []string) {
 	for _, arg := range args {
 		if arg == "--model" {
 			t.Fatalf("expected --model to be absent from args %v", args)
+		}
+	}
+}
+
+func assertCodexEffortFlag(t *testing.T, args []string, want string) {
+	t.Helper()
+
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--effort" {
+			if args[i+1] != want {
+				t.Fatalf("expected --effort %q, got %q in args %v", want, args[i+1], args)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected --effort %q in args %v", want, args)
+}
+
+func assertCodexEffortFlagAbsent(t *testing.T, args []string) {
+	t.Helper()
+
+	for _, arg := range args {
+		if arg == "--effort" {
+			t.Fatalf("expected --effort to be absent from args %v", args)
 		}
 	}
 }
