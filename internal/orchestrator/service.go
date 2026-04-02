@@ -1,4 +1,4 @@
-﻿package orchestrator
+package orchestrator
 
 import (
 	"bytes"
@@ -139,7 +139,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 		ID:           newChainID(now),
 		Goals:        make([]domain.ChainGoal, len(goals)),
 		CurrentIndex: 0,
-		Status:       "running",
+		Status:       domain.ChainStatusRunning,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -150,7 +150,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 			StrictnessLevel: normalizeStrictnessLevel(goal.StrictnessLevel),
 			ContextMode:     normalizeContextMode(goal.ContextMode),
 			MaxSteps:        goal.MaxSteps,
-			Status:          "pending",
+			Status:          domain.ChainGoalStatusPending,
 		}
 		if chain.Goals[i].Goal == "" {
 			return nil, fmt.Errorf("goals[%d].goal is required", i)
@@ -243,24 +243,24 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		ChainGoalIndex:  index,
 	})
 	if err != nil {
-		goal.Status = "failed"
-		chain.Status = "failed"
+		goal.Status = domain.ChainGoalStatusFailed
+		chain.Status = domain.ChainStatusFailed
 		s.touchChain(chain)
 		_ = s.state.SaveChain(ctx, chain)
 		return err
 	}
 
 	goal.JobID = job.ID
-	goal.Status = "running"
+	goal.Status = domain.ChainGoalStatusRunning
 	chain.CurrentIndex = index
-	chain.Status = "running"
+	chain.Status = domain.ChainStatusRunning
 	s.touchChain(chain)
 	if err := s.state.SaveChain(ctx, chain); err != nil {
 		return err
 	}
 	if err := s.startPreparedJobAsync(ctx, job); err != nil {
-		goal.Status = "failed"
-		chain.Status = "failed"
+		goal.Status = domain.ChainGoalStatusFailed
+		chain.Status = domain.ChainStatusFailed
 		s.touchChain(chain)
 		_ = s.state.SaveChain(ctx, chain)
 		return err
@@ -402,6 +402,113 @@ func (s *Service) Get(ctx context.Context, jobID string) (*domain.Job, error) {
 
 func (s *Service) GetChain(ctx context.Context, chainID string) (*domain.JobChain, error) {
 	return s.state.LoadChain(ctx, chainID)
+}
+
+func (s *Service) PauseChain(ctx context.Context, chainID string) (*domain.JobChain, error) {
+	chain, err := s.state.LoadChain(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusCancelled {
+		return chain, nil
+	}
+	chain.Status = domain.ChainStatusPaused
+	s.touchChain(chain)
+	if err := s.state.SaveChain(ctx, chain); err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
+func (s *Service) ResumeChain(ctx context.Context, chainID string) (*domain.JobChain, error) {
+	chain, err := s.state.LoadChain(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusCancelled {
+		return chain, nil
+	}
+	chain.Status = domain.ChainStatusRunning
+	s.touchChain(chain)
+	if err := s.state.SaveChain(ctx, chain); err != nil {
+		return nil, err
+	}
+	if !s.chainCurrentGoalHasCompleted(ctx, chain) {
+		return chain, nil
+	}
+	if err := s.advanceChain(ctx, chain); err != nil {
+		return nil, err
+	}
+	return s.state.LoadChain(ctx, chain.ID)
+}
+
+func (s *Service) CancelChain(ctx context.Context, chainID, reason string) (*domain.JobChain, error) {
+	chain, err := s.state.LoadChain(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusCancelled {
+		return chain, nil
+	}
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "operator cancelled chain"
+	}
+	if _, err := s.interruptChainGoalJob(ctx, chain, fmt.Sprintf("cancelled by chain operator: %s", reason)); err != nil {
+		return nil, err
+	}
+	if chain.CurrentIndex >= 0 && chain.CurrentIndex < len(chain.Goals) {
+		current := &chain.Goals[chain.CurrentIndex]
+		if current.Status == domain.ChainGoalStatusPending || current.Status == domain.ChainGoalStatusRunning {
+			current.Status = domain.ChainGoalStatusFailed
+		}
+	}
+	chain.Status = domain.ChainStatusCancelled
+	s.touchChain(chain)
+	if err := s.state.SaveChain(ctx, chain); err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
+func (s *Service) SkipChainGoal(ctx context.Context, chainID string) (*domain.JobChain, error) {
+	chain, err := s.state.LoadChain(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusCancelled {
+		return chain, nil
+	}
+	if chain.CurrentIndex < 0 || chain.CurrentIndex >= len(chain.Goals) {
+		return nil, fmt.Errorf("chain current index out of range: %d", chain.CurrentIndex)
+	}
+
+	workdir, err := s.interruptChainGoalJob(ctx, chain, "chain goal skipped by operator")
+	if err != nil {
+		return nil, err
+	}
+
+	current := &chain.Goals[chain.CurrentIndex]
+	current.Status = domain.ChainGoalStatusSkipped
+	if chain.CurrentIndex == len(chain.Goals)-1 {
+		chain.Status = domain.ChainStatusDone
+		s.touchChain(chain)
+		if err := s.state.SaveChain(ctx, chain); err != nil {
+			return nil, err
+		}
+		return chain, nil
+	}
+
+	chain.Status = domain.ChainStatusRunning
+	s.touchChain(chain)
+	if err := s.state.SaveChain(ctx, chain); err != nil {
+		return nil, err
+	}
+	if err := s.startChainGoal(ctx, chain, workdir, chain.CurrentIndex+1); err != nil {
+		return nil, err
+	}
+	return s.state.LoadChain(ctx, chain.ID)
 }
 
 func (s *Service) StartHarnessProcess(ctx context.Context, req runtimeexec.StartRequest) (runtimeexec.ProcessHandle, error) {
@@ -550,7 +657,7 @@ func (s *Service) ListChains(ctx context.Context) ([]*domain.JobChain, error) {
 }
 
 func (s *Service) advanceChain(ctx context.Context, chain *domain.JobChain) error {
-	if chain == nil || chain.Status == "failed" || chain.Status == "done" {
+	if chain == nil || chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusPaused || chain.Status == domain.ChainStatusCancelled {
 		return nil
 	}
 	if chain.CurrentIndex < 0 || chain.CurrentIndex >= len(chain.Goals) {
@@ -568,9 +675,9 @@ func (s *Service) advanceChain(ctx context.Context, chain *domain.JobChain) erro
 
 	switch job.Status {
 	case domain.JobStatusDone:
-		current.Status = "done"
+		current.Status = domain.ChainGoalStatusDone
 		if chain.CurrentIndex == len(chain.Goals)-1 {
-			chain.Status = "done"
+			chain.Status = domain.ChainStatusDone
 			s.touchChain(chain)
 			return s.state.SaveChain(ctx, chain)
 		}
@@ -578,10 +685,17 @@ func (s *Service) advanceChain(ctx context.Context, chain *domain.JobChain) erro
 		if err := s.state.SaveChain(ctx, chain); err != nil {
 			return err
 		}
-		return s.startChainGoal(ctx, chain, job.WorkspaceDir, chain.CurrentIndex+1)
+		latest, err := s.state.LoadChain(ctx, chain.ID)
+		if err != nil {
+			return err
+		}
+		if latest.Status == domain.ChainStatusPaused || latest.Status == domain.ChainStatusCancelled || latest.Status == domain.ChainStatusFailed || latest.Status == domain.ChainStatusDone {
+			return nil
+		}
+		return s.startChainGoal(ctx, latest, job.WorkspaceDir, latest.CurrentIndex+1)
 	case domain.JobStatusBlocked, domain.JobStatusFailed:
-		current.Status = "failed"
-		chain.Status = "failed"
+		current.Status = domain.ChainGoalStatusFailed
+		chain.Status = domain.ChainStatusFailed
 		s.touchChain(chain)
 		return s.state.SaveChain(ctx, chain)
 	default:
@@ -597,6 +711,17 @@ func (s *Service) handleChainCompletion(ctx context.Context, job *domain.Job) er
 	if err != nil {
 		return err
 	}
+	if chain.Status == domain.ChainStatusCancelled {
+		return nil
+	}
+	if chain.Status == domain.ChainStatusPaused {
+		if job.ChainGoalIndex >= 0 && job.ChainGoalIndex < len(chain.Goals) {
+			chain.Goals[job.ChainGoalIndex].Status = domain.ChainGoalStatusDone
+			s.touchChain(chain)
+			return s.state.SaveChain(ctx, chain)
+		}
+		return nil
+	}
 	return s.advanceChain(ctx, chain)
 }
 
@@ -608,15 +733,62 @@ func (s *Service) handleChainTerminalState(ctx context.Context, job *domain.Job)
 	if err != nil {
 		return err
 	}
-	if chain.Status == "failed" || chain.Status == "done" {
+	if chain.Status == domain.ChainStatusFailed || chain.Status == domain.ChainStatusDone || chain.Status == domain.ChainStatusCancelled {
 		return nil
 	}
 	if job.ChainGoalIndex >= 0 && job.ChainGoalIndex < len(chain.Goals) {
-		chain.Goals[job.ChainGoalIndex].Status = "failed"
+		chain.Goals[job.ChainGoalIndex].Status = domain.ChainGoalStatusFailed
 	}
-	chain.Status = "failed"
+	chain.Status = domain.ChainStatusFailed
 	s.touchChain(chain)
 	return s.state.SaveChain(ctx, chain)
+}
+
+func (s *Service) chainCurrentGoalHasCompleted(ctx context.Context, chain *domain.JobChain) bool {
+	if chain == nil || chain.CurrentIndex < 0 || chain.CurrentIndex >= len(chain.Goals) {
+		return false
+	}
+	current := chain.Goals[chain.CurrentIndex]
+	if current.Status == domain.ChainGoalStatusDone {
+		return true
+	}
+	if strings.TrimSpace(current.JobID) == "" {
+		return false
+	}
+	job, err := s.state.LoadJob(ctx, current.JobID)
+	if err != nil {
+		return false
+	}
+	return job.Status == domain.JobStatusDone
+}
+
+func (s *Service) interruptChainGoalJob(ctx context.Context, chain *domain.JobChain, reason string) (string, error) {
+	if chain == nil || chain.CurrentIndex < 0 || chain.CurrentIndex >= len(chain.Goals) {
+		return s.workspaceRoot, nil
+	}
+	current := chain.Goals[chain.CurrentIndex]
+	if strings.TrimSpace(current.JobID) == "" {
+		return s.workspaceRoot, nil
+	}
+	job, err := s.state.LoadJob(ctx, current.JobID)
+	if err != nil {
+		return "", err
+	}
+	if job.Status == domain.JobStatusDone || job.Status == domain.JobStatusFailed || job.Status == domain.JobStatusBlocked {
+		return firstNonEmpty(job.WorkspaceDir, s.workspaceRoot), nil
+	}
+
+	job.Status = domain.JobStatusBlocked
+	job.BlockedReason = reason
+	job.FailureReason = ""
+	job.PendingApproval = nil
+	job.LeaderContextSummary = reason
+	s.addEvent(job, "job_cancelled", reason)
+	s.touch(job)
+	if err := s.state.SaveJob(ctx, job); err != nil {
+		return "", err
+	}
+	return firstNonEmpty(job.WorkspaceDir, s.workspaceRoot), nil
 }
 
 func (s *Service) runLoop(ctx context.Context, job *domain.Job) (*domain.Job, error) {

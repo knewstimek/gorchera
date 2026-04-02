@@ -167,6 +167,44 @@ type WorkerTask struct {
 	NextHint  string   `json:"next_hint,omitempty"`
 }
 
+type ChainGoalStatus = string
+
+const (
+	ChainGoalStatusPending ChainGoalStatus = "pending"
+	ChainGoalStatusRunning ChainGoalStatus = "running"
+	ChainGoalStatusDone    ChainGoalStatus = "done"
+	ChainGoalStatusFailed  ChainGoalStatus = "failed"
+	ChainGoalStatusSkipped ChainGoalStatus = "skipped"
+)
+
+func ValidChainGoalStatus(status ChainGoalStatus) bool {
+	switch status {
+	case ChainGoalStatusPending, ChainGoalStatusRunning, ChainGoalStatusDone, ChainGoalStatusFailed, ChainGoalStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+type ChainStatus = string
+
+const (
+	ChainStatusRunning   ChainStatus = "running"
+	ChainStatusPaused    ChainStatus = "paused"
+	ChainStatusDone      ChainStatus = "done"
+	ChainStatusFailed    ChainStatus = "failed"
+	ChainStatusCancelled ChainStatus = "cancelled"
+)
+
+func ValidChainStatus(status ChainStatus) bool {
+	switch status {
+	case ChainStatusRunning, ChainStatusPaused, ChainStatusDone, ChainStatusFailed, ChainStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 type ChainGoal struct {
 	Goal            string       `json:"goal"`
 	Provider        ProviderName `json:"provider"`

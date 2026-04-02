@@ -266,6 +266,51 @@ func toolList() []toolDef {
 			},
 		},
 		{
+			Name:        "gorchera_pause_chain",
+			Description: "Pause a sequential job chain after the current goal completes.",
+			InputSchema: toolInputSchema{
+				Type: "object",
+				Properties: map[string]schemaProp{
+					"chain_id": {Type: "string", Description: "Chain ID"},
+				},
+				Required: []string{"chain_id"},
+			},
+		},
+		{
+			Name:        "gorchera_resume_chain",
+			Description: "Resume a paused sequential job chain.",
+			InputSchema: toolInputSchema{
+				Type: "object",
+				Properties: map[string]schemaProp{
+					"chain_id": {Type: "string", Description: "Chain ID"},
+				},
+				Required: []string{"chain_id"},
+			},
+		},
+		{
+			Name:        "gorchera_cancel_chain",
+			Description: "Cancel a sequential job chain.",
+			InputSchema: toolInputSchema{
+				Type: "object",
+				Properties: map[string]schemaProp{
+					"chain_id": {Type: "string", Description: "Chain ID"},
+					"reason":   {Type: "string", Description: "Cancellation reason"},
+				},
+				Required: []string{"chain_id"},
+			},
+		},
+		{
+			Name:        "gorchera_skip_chain_goal",
+			Description: "Skip the current goal in a sequential job chain and advance to the next goal.",
+			InputSchema: toolInputSchema{
+				Type: "object",
+				Properties: map[string]schemaProp{
+					"chain_id": {Type: "string", Description: "Chain ID"},
+				},
+				Required: []string{"chain_id"},
+			},
+		},
+		{
 			Name:        "gorchera_events",
 			Description: "Get recent events for a job.",
 			InputSchema: toolInputSchema{
@@ -399,6 +444,14 @@ func (s *Server) handleToolCall(req jsonRPCRequest) *jsonRPCResponse {
 		result, err = s.toolStatus(ctx, args)
 	case "gorchera_chain_status":
 		result, err = s.toolChainStatus(ctx, args)
+	case "gorchera_pause_chain":
+		result, err = s.toolPauseChain(ctx, args)
+	case "gorchera_resume_chain":
+		result, err = s.toolResumeChain(ctx, args)
+	case "gorchera_cancel_chain":
+		result, err = s.toolCancelChain(ctx, args)
+	case "gorchera_skip_chain_goal":
+		result, err = s.toolSkipChainGoal(ctx, args)
 	case "gorchera_events":
 		result, err = s.toolEvents(ctx, args)
 	case "gorchera_artifacts":
@@ -527,6 +580,54 @@ func (s *Server) toolChainStatus(ctx context.Context, args map[string]any) (tool
 		return toolResult{}, err
 	}
 	chain, err := s.service.GetChain(ctx, chainID)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return jsonResult(chain)
+}
+
+func (s *Server) toolPauseChain(ctx context.Context, args map[string]any) (toolResult, error) {
+	chainID, err := requireStringArg(args, "chain_id")
+	if err != nil {
+		return toolResult{}, err
+	}
+	chain, err := s.service.PauseChain(ctx, chainID)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return jsonResult(chain)
+}
+
+func (s *Server) toolResumeChain(ctx context.Context, args map[string]any) (toolResult, error) {
+	chainID, err := requireStringArg(args, "chain_id")
+	if err != nil {
+		return toolResult{}, err
+	}
+	chain, err := s.service.ResumeChain(ctx, chainID)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return jsonResult(chain)
+}
+
+func (s *Server) toolCancelChain(ctx context.Context, args map[string]any) (toolResult, error) {
+	chainID, err := requireStringArg(args, "chain_id")
+	if err != nil {
+		return toolResult{}, err
+	}
+	chain, err := s.service.CancelChain(ctx, chainID, stringArg(args, "reason"))
+	if err != nil {
+		return toolResult{}, err
+	}
+	return jsonResult(chain)
+}
+
+func (s *Server) toolSkipChainGoal(ctx context.Context, args map[string]any) (toolResult, error) {
+	chainID, err := requireStringArg(args, "chain_id")
+	if err != nil {
+		return toolResult{}, err
+	}
+	chain, err := s.service.SkipChainGoal(ctx, chainID)
 	if err != nil {
 		return toolResult{}, err
 	}

@@ -68,8 +68,9 @@ All known bugs have been fixed (2026-04-02, TOCTOU fixed separately).
 - Normal strictness evaluator gate: `implement` required, `review` optional, rule-based override for provider blocked
 - Claude adapter real integration (planner/leader/worker confirmed, --permission-mode dontAsk, --json-schema, stdin prompt)
 - Codex adapter real integration (GPT full pipeline done convergence achieved, stdin prompt, workspace-write sandbox, per-role GPT model selection with Claude-shorthand suppression)
-- MCP server (JSON-RPC 2.0 stdio, 12 tools, notification support)
-- Sequential job chaining with persisted `JobChain` state, automatic next-goal start on successful completion, and terminal failure propagation on blocked/failed chained jobs
+- MCP server (JSON-RPC 2.0 stdio, 16 tools, notification support)
+- Sequential job chaining with persisted `JobChain` state, automatic next-goal start on successful completion, terminal failure propagation on blocked/failed chained jobs, and chain control states `paused` / `cancelled`
+- Chain goal controls for pause, resume, cancel, and skip, including goal status `skipped` and MCP exposure for `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, and `gorchera_skip_chain_goal`
 - Evaluator strictness 3 levels (strict/normal/lenient) with per-level verification rules
 - TOCTOU fix: atomic harness ownership via claimHarness/releaseHarnessClaim + harnessInflight map
 - Fail-fast workspace directory validation during job creation in orchestrator Start/StartAsync and MCP start-job handling
@@ -133,3 +134,5 @@ Currently at Phase 1. Known bugs fixed. Next:
 - Added persisted sequential job chaining in `internal/domain/types.go`, `internal/store/state_store.go`, and `internal/orchestrator/service.go`
 - Added MCP chain tools: `gorchera_start_chain` and `gorchera_chain_status`
 - Added focused store/service/MCP tests covering chain persistence, first-goal start, sequential advancement, final done, and terminal failure stop behavior
+- Added chain control operations in `internal/orchestrator/service.go` for pause, resume, cancel, and skip, plus domain statuses `paused`, `cancelled`, and `skipped`
+- Added MCP chain control tools: `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, and `gorchera_skip_chain_goal`
