@@ -5,6 +5,11 @@ var currentJobId = null;
 var currentChainId = null;
 var activePanel = 'jobs';
 var refreshTimer = null;
+var activeSSE = null;
+var allJobs = [];
+var allChains = [];
+// Track which lazy sections have been loaded for the current job
+var loadedSections = {};
 
 // --- API helpers ---
 
@@ -84,6 +89,22 @@ function fmtTime(ts) {
 	}
 }
 
+// --- Mobile sidebar drawer ---
+
+function toggleSidebar() {
+	var sidebar = document.getElementById('sidebar');
+	var overlay = document.getElementById('sidebar-overlay');
+	var isOpen = sidebar.classList.toggle('sidebar-open');
+	overlay.classList.toggle('hidden', !isOpen);
+}
+
+function closeSidebar() {
+	var sidebar = document.getElementById('sidebar');
+	var overlay = document.getElementById('sidebar-overlay');
+	sidebar.classList.remove('sidebar-open');
+	overlay.classList.add('hidden');
+}
+
 // --- Panel switching ---
 
 function showPanel(name) {
@@ -100,12 +121,83 @@ function showPanel(name) {
 	}
 }
 
+// --- Filter logic ---
+
+function getFilterState() {
+	var search = (document.getElementById('search-input').value || '').toLowerCase();
+	var status = document.getElementById('status-filter').value.toLowerCase();
+	return { search: search, status: status };
+}
+
+function matchesFilter(item, filter) {
+	var id = (item.id || '').toLowerCase();
+	var goal = (item.goal || '').toLowerCase();
+	var itemStatus = (item.status || '').toLowerCase();
+
+	if (filter.search && id.indexOf(filter.search) === -1 && goal.indexOf(filter.search) === -1) {
+		return false;
+	}
+
+	if (filter.status) {
+		// "waiting" matches waiting, waiting_worker, waiting_approval
+		if (filter.status === 'waiting') {
+			if (itemStatus.indexOf('waiting') === -1) return false;
+		} else if (filter.status === 'done') {
+			if (itemStatus !== 'done' && itemStatus !== 'completed') return false;
+		} else if (filter.status === 'running') {
+			if (itemStatus !== 'running') return false;
+		} else if (filter.status === 'failed') {
+			if (itemStatus !== 'failed') return false;
+		} else if (filter.status === 'cancelled') {
+			if (itemStatus !== 'cancelled' && itemStatus !== 'canceled') return false;
+		} else {
+			if (itemStatus.indexOf(filter.status) === -1) return false;
+		}
+	}
+
+	return true;
+}
+
+function applyFilters() {
+	var filter = getFilterState();
+	if (activePanel === 'jobs') {
+		renderJobList(allJobs.filter(function(j) { return matchesFilter(j, filter); }));
+	} else {
+		renderChainList(allChains.filter(function(c) { return matchesFilter(c, filter); }));
+	}
+}
+
+// --- Aggregate token cost summary across all jobs ---
+
+function computeAggregateTokens(jobs) {
+	var totals = { input_tokens: 0, output_tokens: 0, total_tokens: 0, estimated_cost_usd: 0 };
+	for (var i = 0; i < jobs.length; i++) {
+		var u = jobs[i].token_usage;
+		if (!u) continue;
+		totals.input_tokens += (u.input_tokens || 0);
+		totals.output_tokens += (u.output_tokens || 0);
+		totals.total_tokens += (u.total_tokens || 0);
+		totals.estimated_cost_usd += (u.estimated_cost_usd || 0);
+	}
+	return totals;
+}
+
+function renderStats(totals) {
+	document.getElementById('stat-input').textContent = totals.input_tokens.toLocaleString();
+	document.getElementById('stat-output').textContent = totals.output_tokens.toLocaleString();
+	document.getElementById('stat-total').textContent = totals.total_tokens.toLocaleString();
+	document.getElementById('stat-cost').textContent = '$' + totals.estimated_cost_usd.toFixed(4);
+}
+
 // --- Jobs ---
 
 function fetchJobs() {
 	apiGet('/jobs').then(function(jobs) {
 		clearError();
-		renderJobList(jobs || []);
+		allJobs = jobs || [];
+		var filter = getFilterState();
+		renderJobList(allJobs.filter(function(j) { return matchesFilter(j, filter); }));
+		renderStats(computeAggregateTokens(allJobs));
 		if (currentJobId) {
 			fetchJobDetail(currentJobId);
 		}
@@ -140,6 +232,7 @@ function fetchJobDetail(id) {
 		clearError();
 		currentJobId = id;
 		renderJobDetail(job);
+		openSSE(id, job);
 	}).catch(function(err) {
 		showError(err.message);
 	});
@@ -158,10 +251,16 @@ function renderJobDetail(job) {
 	statusEl.className = 'badge ' + badgeClass(job.status);
 	statusEl.textContent = job.status || 'unknown';
 
-	// Show/hide approve/reject buttons
-	var actionsEl = document.getElementById('job-actions');
-	var needsApproval = job.status === 'waiting_approval';
-	actionsEl.classList.toggle('hidden', !needsApproval);
+	// Contextual action buttons based on status
+	var s = (job.status || '').toLowerCase();
+	var needsApproval = s === 'waiting_approval';
+	var isTerminal = s === 'done' || s === 'failed' || s === 'cancelled' || s === 'canceled';
+	document.getElementById('btn-approve').classList.toggle('hidden', !needsApproval);
+	document.getElementById('btn-reject').classList.toggle('hidden', !needsApproval);
+	document.getElementById('btn-cancel').classList.toggle('hidden', isTerminal);
+	document.getElementById('btn-retry').classList.toggle('hidden', s !== 'failed');
+	document.getElementById('btn-resume').classList.toggle('hidden', s !== 'paused');
+	document.getElementById('job-actions').classList.remove('hidden');
 
 	// Token usage
 	renderTokenUsage(job.token_usage);
@@ -169,8 +268,17 @@ function renderJobDetail(job) {
 	// Steps
 	renderSteps(job.steps || []);
 
+	// Steer history from events
+	renderSteerHistory(job.events || []);
+
 	// Events
 	renderEvents(job.events || []);
+
+	// Reset lazy-loaded sections on job switch
+	loadedSections = {};
+	document.getElementById('detail-artifacts').innerHTML = '<p class="secondary loading-small">Expand to load...</p>';
+	document.getElementById('detail-planning').innerHTML = '<p class="secondary loading-small">Expand to load...</p>';
+	document.getElementById('detail-evaluator').innerHTML = '<p class="secondary loading-small">Expand to load...</p>';
 
 	// Mark selected in list
 	var items = document.querySelectorAll('#job-list .list-item');
@@ -228,6 +336,30 @@ function renderSteps(steps) {
 	el.innerHTML = html;
 }
 
+// Extract and render steer events from the job events array
+function renderSteerHistory(events) {
+	var el = document.getElementById('detail-steer-history');
+	var steerEvents = (events || []).filter(function(ev) {
+		return (ev.kind || '').indexOf('steer') !== -1;
+	});
+	if (!steerEvents.length) {
+		el.innerHTML = '<p class="secondary">No steer messages.</p>';
+		return;
+	}
+	var html = '';
+	for (var i = 0; i < steerEvents.length; i++) {
+		var ev = steerEvents[i];
+		html += '<div class="steer-history-item">';
+		html += '<div class="steer-history-meta">';
+		html += '<span class="event-time">' + esc(fmtTime(ev.time)) + '</span>';
+		html += '<span class="event-kind">' + esc(ev.kind || '') + '</span>';
+		html += '</div>';
+		html += '<div class="steer-history-msg">' + esc(ev.message || '') + '</div>';
+		html += '</div>';
+	}
+	el.innerHTML = html;
+}
+
 function renderEvents(events) {
 	var el = document.getElementById('detail-events');
 	if (!events.length) {
@@ -235,7 +367,7 @@ function renderEvents(events) {
 		return;
 	}
 	var html = '';
-	// Show latest events first
+	// Latest events first
 	for (var i = events.length - 1; i >= 0; i--) {
 		var ev = events[i];
 		html += '<div class="event-item">';
@@ -247,12 +379,144 @@ function renderEvents(events) {
 	el.innerHTML = html;
 }
 
+// --- SSE Real-time Event Streaming ---
+
+function openSSE(jobId, job) {
+	closeSSE();
+
+	var s = (job && job.status || '').toLowerCase();
+	var isTerminal = s === 'done' || s === 'failed' || s === 'cancelled' || s === 'canceled';
+	if (isTerminal) {
+		setSSEIndicator('sse-off', 'Job finished');
+		return;
+	}
+
+	var sseEl = document.getElementById('detail-sse-events');
+	sseEl.innerHTML = '';
+	setSSEIndicator('sse-connecting', 'Connecting...');
+
+	var es = new EventSource(BASE_URL + '/jobs/' + jobId + '/events/stream');
+	activeSSE = es;
+
+	es.addEventListener('job_event', function(e) {
+		try {
+			var ev = JSON.parse(e.data);
+			setSSEIndicator('sse-on', 'Live');
+
+			var item = document.createElement('div');
+			item.className = 'event-item sse-event-new';
+			item.innerHTML =
+				'<span class="event-time">' + esc(fmtTime(ev.time)) + '</span>' +
+				'<span class="event-kind">' + esc(ev.kind || '') + '</span>' +
+				'<span class="event-message">' + esc(ev.message || '') + '</span>';
+			sseEl.insertBefore(item, sseEl.firstChild);
+
+			// Cap live events at 50 to avoid DOM bloat
+			while (sseEl.children.length > 50) {
+				sseEl.removeChild(sseEl.lastChild);
+			}
+
+			// When the job reaches a terminal state via SSE, close and refresh
+			var k = ev.kind || '';
+			if (k === 'job_done' || k === 'job_failed' || k === 'job_cancelled') {
+				closeSSE();
+				fetchJobDetail(jobId);
+			}
+		} catch(ex) {}
+	});
+
+	es.onerror = function() {
+		setSSEIndicator('sse-off', 'Disconnected');
+	};
+}
+
+function closeSSE() {
+	if (activeSSE) {
+		activeSSE.close();
+		activeSSE = null;
+	}
+	setSSEIndicator('sse-off', 'Disconnected');
+}
+
+function setSSEIndicator(cls, title) {
+	var ind = document.getElementById('sse-indicator');
+	if (!ind) return;
+	ind.className = 'sse-indicator ' + cls;
+	ind.title = title;
+}
+
+// --- Collapsible sub-views ---
+
+function toggleSection(id) {
+	var body = document.getElementById(id);
+	var icon = document.getElementById('icon-' + id);
+	if (!body) return;
+
+	var isNowCollapsed = body.classList.toggle('collapsed');
+	if (icon) {
+		// right-arrow = collapsed, down-arrow = expanded
+		icon.innerHTML = isNowCollapsed ? '&#9654;' : '&#9660;';
+	}
+
+	// Lazy-load data on first expand
+	if (!isNowCollapsed && !loadedSections[id]) {
+		loadedSections[id] = true;
+		if (id === 'section-artifacts') loadArtifacts();
+		if (id === 'section-planning') loadPlanning();
+		if (id === 'section-evaluator') loadEvaluator();
+	}
+}
+
+function loadArtifacts() {
+	if (!currentJobId) return;
+	var el = document.getElementById('detail-artifacts');
+	el.innerHTML = '<p class="secondary">Loading...</p>';
+	apiGet('/jobs/' + currentJobId + '/artifacts').then(function(artifacts) {
+		if (!artifacts || !artifacts.length) {
+			el.innerHTML = '<p class="secondary">No artifacts.</p>';
+			return;
+		}
+		var html = '<ul class="artifact-list">';
+		for (var i = 0; i < artifacts.length; i++) {
+			html += '<li class="artifact-item">' + esc(artifacts[i]) + '</li>';
+		}
+		html += '</ul>';
+		el.innerHTML = html;
+	}).catch(function(err) {
+		el.innerHTML = '<p class="secondary">Failed: ' + esc(err.message) + '</p>';
+	});
+}
+
+function loadPlanning() {
+	if (!currentJobId) return;
+	var el = document.getElementById('detail-planning');
+	el.innerHTML = '<p class="secondary">Loading...</p>';
+	apiGet('/jobs/' + currentJobId + '/planning').then(function(data) {
+		el.innerHTML = '<pre class="json-view">' + esc(JSON.stringify(data, null, 2)) + '</pre>';
+	}).catch(function(err) {
+		el.innerHTML = '<p class="secondary">Failed: ' + esc(err.message) + '</p>';
+	});
+}
+
+function loadEvaluator() {
+	if (!currentJobId) return;
+	var el = document.getElementById('detail-evaluator');
+	el.innerHTML = '<p class="secondary">Loading...</p>';
+	apiGet('/jobs/' + currentJobId + '/evaluator').then(function(data) {
+		el.innerHTML = '<pre class="json-view">' + esc(JSON.stringify(data, null, 2)) + '</pre>';
+	}).catch(function(err) {
+		el.innerHTML = '<p class="secondary">Failed: ' + esc(err.message) + '</p>';
+	});
+}
+
 // --- Chains ---
 
 function fetchChains() {
 	apiGet('/chains').then(function(chains) {
 		clearError();
-		renderChainList(chains || []);
+		allChains = chains || [];
+		var filter = getFilterState();
+		renderChainList(allChains.filter(function(c) { return matchesFilter(c, filter); }));
 		if (currentChainId) {
 			fetchChainDetail(currentChainId);
 		}
@@ -306,6 +570,7 @@ function fetchChainDetail(id) {
 function renderChainDetail(chain) {
 	document.getElementById('detail-placeholder').classList.add('hidden');
 	document.getElementById('job-detail').classList.add('hidden');
+	closeSSE();
 	var el = document.getElementById('chain-detail');
 	el.classList.remove('hidden');
 
@@ -316,7 +581,7 @@ function renderChainDetail(chain) {
 	statusEl.className = 'badge ' + badgeClass(chain.status);
 	statusEl.textContent = chain.status || 'unknown';
 
-	// Progress
+	// Overall chain progress bar
 	var goals = chain.goals || [];
 	var done = 0;
 	for (var i = 0; i < goals.length; i++) {
@@ -325,13 +590,14 @@ function renderChainDetail(chain) {
 	var progressEl = document.getElementById('detail-chain-progress');
 	if (goals.length > 0) {
 		var pct = Math.round((done / goals.length) * 100);
-		progressEl.innerHTML = '<div class="chain-progress-bar"><div class="chain-progress-fill" style="width:' + pct + '%"></div></div>' +
+		progressEl.innerHTML =
+			'<div class="chain-progress-bar"><div class="chain-progress-fill" style="width:' + pct + '%"></div></div>' +
 			'<p class="secondary">' + done + ' of ' + goals.length + ' goals completed (' + pct + '%)</p>';
 	} else {
 		progressEl.innerHTML = '<p class="secondary">No goals.</p>';
 	}
 
-	// Goals list
+	// Per-goal progress bars with status badges
 	var goalsEl = document.getElementById('detail-chain-goals');
 	if (!goals.length) {
 		goalsEl.innerHTML = '<p class="secondary">No goals.</p>';
@@ -339,10 +605,23 @@ function renderChainDetail(chain) {
 		var html = '';
 		for (var j = 0; j < goals.length; j++) {
 			var g = goals[j];
+			var gDone = g.status === 'done' || g.status === 'completed';
+			var gFailed = g.status === 'failed';
+			var gRunning = g.status === 'running';
+			var gPct = gDone ? 100 : (gFailed ? 100 : (gRunning ? 50 : 0));
+			var fillColor = gFailed ? '#e94560' : (gDone ? '#4CAF50' : (gRunning ? '#0f3460' : '#1e2a4a'));
+
 			html += '<div class="chain-goal-item">';
 			html += '<span class="chain-goal-index">' + (j + 1) + '</span>';
+			html += '<div class="chain-goal-body">';
+			html += '<div class="chain-goal-header">';
 			html += '<span class="chain-goal-text">' + esc(g.goal || g.text || JSON.stringify(g)) + '</span>';
 			html += makeBadge(g.status);
+			html += '</div>';
+			html += '<div class="chain-progress-bar goal-progress-bar">';
+			html += '<div class="chain-progress-fill" style="width:' + gPct + '%;background:' + fillColor + '"></div>';
+			html += '</div>';
+			html += '</div>';
 			html += '</div>';
 		}
 		goalsEl.innerHTML = html;
@@ -367,6 +646,18 @@ function approveJob(id) {
 
 function rejectJob(id) {
 	return apiPost('/jobs/' + id + '/reject', {});
+}
+
+function cancelJob(id) {
+	return apiPost('/jobs/' + id + '/cancel', {});
+}
+
+function retryJob(id) {
+	return apiPost('/jobs/' + id + '/retry', {});
+}
+
+function resumeJob(id) {
+	return apiPost('/jobs/' + id + '/resume', {});
 }
 
 function steerCurrentJob() {
@@ -404,17 +695,53 @@ function rejectCurrentJob() {
 	});
 }
 
-// --- Event delegation ---
+function cancelCurrentJob() {
+	if (!currentJobId) return;
+	if (!confirm('Cancel job ' + currentJobId + '?')) return;
+	cancelJob(currentJobId).then(function() {
+		clearError();
+		fetchJobDetail(currentJobId);
+		fetchJobs();
+	}).catch(function(err) {
+		showError(err.message);
+	});
+}
+
+function retryCurrentJob() {
+	if (!currentJobId) return;
+	retryJob(currentJobId).then(function() {
+		clearError();
+		fetchJobDetail(currentJobId);
+		fetchJobs();
+	}).catch(function(err) {
+		showError(err.message);
+	});
+}
+
+function resumeCurrentJob() {
+	if (!currentJobId) return;
+	resumeJob(currentJobId).then(function() {
+		clearError();
+		fetchJobDetail(currentJobId);
+		fetchJobs();
+	}).catch(function(err) {
+		showError(err.message);
+	});
+}
+
+// --- Event delegation for list clicks ---
 
 document.addEventListener('click', function(e) {
 	var jobItem = e.target.closest('[data-job-id]');
 	if (jobItem) {
 		fetchJobDetail(jobItem.getAttribute('data-job-id'));
+		closeSidebar();
 		return;
 	}
 	var chainItem = e.target.closest('[data-chain-id]');
 	if (chainItem) {
 		fetchChainDetail(chainItem.getAttribute('data-chain-id'));
+		closeSidebar();
 		return;
 	}
 });
