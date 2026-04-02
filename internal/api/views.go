@@ -31,6 +31,8 @@ type PlanningView struct {
 	Goal              string              `json:"goal"`
 	TechStack         string              `json:"tech_stack,omitempty"`
 	WorkspaceDir      string              `json:"workspace_dir,omitempty"`
+	RequestedWorkspace string             `json:"requested_workspace_dir,omitempty"`
+	WorkspaceMode     string              `json:"workspace_mode,omitempty"`
 	Provider          domain.ProviderName `json:"provider"`
 	SprintContractRef string              `json:"sprint_contract_ref,omitempty"`
 	PlanningArtifacts []string            `json:"planning_artifact_refs,omitempty"`
@@ -65,6 +67,9 @@ type VerificationView struct {
 type ProfileView struct {
 	JobID                 string               `json:"job_id"`
 	Provider              domain.ProviderName  `json:"provider"`
+	WorkspaceDir          string               `json:"workspace_dir,omitempty"`
+	RequestedWorkspaceDir string               `json:"requested_workspace_dir,omitempty"`
+	WorkspaceMode         string               `json:"workspace_mode,omitempty"`
 	RoleProfilesAvailable bool                 `json:"role_profiles_available"`
 	RoleProfiles          *domain.RoleProfiles `json:"role_profiles,omitempty"`
 	ParallelPolicy        ParallelPolicyView   `json:"parallel_policy"`
@@ -92,6 +97,8 @@ func BuildPlanningView(job *domain.Job) PlanningView {
 		Goal:              job.Goal,
 		TechStack:         job.TechStack,
 		WorkspaceDir:      job.WorkspaceDir,
+		RequestedWorkspace: job.RequestedWorkspaceDir,
+		WorkspaceMode:     job.WorkspaceMode,
 		Provider:          job.Provider,
 		SprintContractRef: job.SprintContractRef,
 		PlanningArtifacts: append([]string(nil), job.PlanningArtifacts...),
@@ -185,6 +192,9 @@ func BuildProfileView(job *domain.Job) ProfileView {
 	return ProfileView{
 		JobID:                 job.ID,
 		Provider:              job.Provider,
+		WorkspaceDir:          job.WorkspaceDir,
+		RequestedWorkspaceDir: job.RequestedWorkspaceDir,
+		WorkspaceMode:         job.WorkspaceMode,
 		RoleProfilesAvailable: true,
 		RoleProfiles:          &job.RoleProfiles,
 		ParallelPolicy:        defaultParallelPolicyView(),

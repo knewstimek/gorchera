@@ -201,18 +201,35 @@ func writeAtomically(path string, data []byte) error {
 		// Windows does not replace an existing destination with os.Rename.
 		// Fall back to remove-then-rename when the target already exists.
 		// Retry briefly so concurrent readers do not fail the overwrite.
-		if _, statErr := os.Stat(path); statErr != nil {
+		_, statErr := os.Stat(path)
+		if statErr != nil && !os.IsNotExist(statErr) {
 			return err
 		}
 
 		lastErr := err
+		targetExists := statErr == nil
 		for attempt := 0; attempt < 20; attempt++ {
-			if removeErr := os.Remove(path); removeErr != nil {
-				lastErr = removeErr
-			} else if renameErr := os.Rename(tmp, path); renameErr == nil {
+			if targetExists {
+				if removeErr := os.Remove(path); removeErr != nil {
+					if !os.IsNotExist(removeErr) {
+						lastErr = removeErr
+						time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+						continue
+					}
+				}
+				targetExists = false
+			}
+
+			if renameErr := os.Rename(tmp, path); renameErr == nil {
 				return nil
 			} else {
 				lastErr = renameErr
+			}
+
+			if _, statErr := os.Stat(path); statErr == nil {
+				targetExists = true
+			} else if !os.IsNotExist(statErr) {
+				lastErr = statErr
 			}
 
 			time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)

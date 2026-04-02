@@ -213,6 +213,7 @@ func toolList() []toolDef {
 					"goal":             {Type: "string", Description: "Natural-language goal for the job (required)"},
 					"provider":         {Type: "string", Description: "Provider name: mock | codex | claude", Default: "claude"},
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
+					"workspace_mode":   {Type: "string", Description: "Workspace mode: shared | isolated. isolated creates a detached git worktree rooted at HEAD for the job.", Default: "shared"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
@@ -511,6 +512,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	}
 	provider := domain.ProviderName(stringArgDefault(args, "provider", "claude"))
 	workspaceDir := stringArg(args, "workspace_dir")
+	workspaceMode := stringArgDefault(args, "workspace_mode", string(domain.WorkspaceModeShared))
 	maxSteps := intArgDefault(args, "max_steps", 8)
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
 	contextMode := stringArgDefault(args, "context_mode", "full")
@@ -522,6 +524,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		Goal:            goal,
 		Provider:        provider,
 		WorkspaceDir:    workspaceDir,
+		WorkspaceMode:   workspaceMode,
 		MaxSteps:        maxSteps,
 		StrictnessLevel: strictnessLevel,
 		ContextMode:     contextMode,

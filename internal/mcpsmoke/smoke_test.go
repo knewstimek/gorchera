@@ -38,6 +38,39 @@ func TestRunBasicScenarioCompletesJob(t *testing.T) {
 	}
 }
 
+func TestRunIsolatedScenarioCreatesDetachedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	serverBin := buildGorcheraBinary(t)
+	workdir := t.TempDir()
+
+	summary, err := Run(Config{
+		ServerBin:   serverBin,
+		Workdir:     workdir,
+		Scenario:    "isolated",
+		KeepWorkdir: true,
+		WaitTimeout: 20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run(isolated) returned error: %v", err)
+	}
+	if summary.StartedJobStatus != string(domain.JobStatusDone) {
+		t.Fatalf("started job status = %q, want done", summary.StartedJobStatus)
+	}
+	if summary.WorkspaceMode != string(domain.WorkspaceModeIsolated) {
+		t.Fatalf("workspace mode = %q, want isolated", summary.WorkspaceMode)
+	}
+	if summary.RequestedWorkspace == "" || summary.ActualWorkspace == "" {
+		t.Fatalf("expected workspace paths in summary, got %#v", summary)
+	}
+	if filepath.Clean(summary.RequestedWorkspace) == filepath.Clean(summary.ActualWorkspace) {
+		t.Fatalf("expected detached workspace, both paths = %q", summary.ActualWorkspace)
+	}
+	if !strings.Contains(summary.ActualWorkspace, filepath.Join(".gorchera-worktrees", filepath.Base(summary.RequestedWorkspace))) {
+		t.Fatalf("expected actual workspace under .gorchera-worktrees, got %q", summary.ActualWorkspace)
+	}
+}
+
 func TestRunRecoveryScenarioCompletesSeededJobs(t *testing.T) {
 	t.Parallel()
 
@@ -70,6 +103,37 @@ func TestRunRecoveryScenarioCompletesSeededJobs(t *testing.T) {
 	}
 	if !strings.Contains(summary.Stderr, "scheduled 3 jobs with max concurrency 2") {
 		t.Fatalf("expected recovery scheduling log, stderr=%q", summary.Stderr)
+	}
+}
+
+func TestRunInterruptScenarioBlocksSeededStaleJobsByDefault(t *testing.T) {
+	t.Parallel()
+
+	serverBin := buildGorcheraBinary(t)
+	workdir := t.TempDir()
+
+	summary, err := Run(Config{
+		ServerBin:     serverBin,
+		Workdir:       workdir,
+		Scenario:      "interrupt",
+		RecoveryJobs:  3,
+		KeepWorkdir:   true,
+		WaitTimeout:   20 * time.Second,
+		RecoveryState: domain.JobStatusWaitingLeader,
+	})
+	if err != nil {
+		t.Fatalf("Run(interrupt) returned error: %v", err)
+	}
+	if len(summary.InterruptedStatuses) != 3 {
+		t.Fatalf("interrupted statuses count = %d, want 3", len(summary.InterruptedStatuses))
+	}
+	for jobID, status := range summary.InterruptedStatuses {
+		if status != string(domain.JobStatusBlocked) {
+			t.Fatalf("interrupted job %s status = %q, want blocked", jobID, status)
+		}
+	}
+	if !strings.Contains(summary.Stderr, "interrupt sweep: blocked 3 recoverable jobs") {
+		t.Fatalf("expected interrupt sweep log, stderr=%q", summary.Stderr)
 	}
 }
 

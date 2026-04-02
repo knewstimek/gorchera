@@ -18,6 +18,13 @@ const (
 	JobStatusDone          JobStatus = "done"
 )
 
+type WorkspaceMode string
+
+const (
+	WorkspaceModeShared   WorkspaceMode = "shared"
+	WorkspaceModeIsolated WorkspaceMode = "isolated"
+)
+
 type StepStatus string
 
 const (
@@ -378,6 +385,8 @@ type Job struct {
 	Goal                    string                 `json:"goal"`
 	TechStack               string                 `json:"tech_stack,omitempty"`
 	WorkspaceDir            string                 `json:"workspace_dir,omitempty"`
+	RequestedWorkspaceDir   string                 `json:"requested_workspace_dir,omitempty"`
+	WorkspaceMode           string                 `json:"workspace_mode,omitempty"`
 	Constraints             []string               `json:"constraints,omitempty"`
 	DoneCriteria            []string               `json:"done_criteria,omitempty"`
 	StrictnessLevel         string                 `json:"strictness_level,omitempty"` // strict | normal | lenient
@@ -403,6 +412,8 @@ type Job struct {
 	Summary                 string                 `json:"summary,omitempty"`
 	LeaderContextSummary    string                 `json:"leader_context_summary,omitempty"`
 	SupervisorDirective     string                 `json:"supervisor_directive,omitempty"`
+	RunOwnerID              string                 `json:"run_owner_id,omitempty"`
+	RunHeartbeatAt          time.Time              `json:"run_heartbeat_at,omitempty"`
 	TokenUsage              TokenUsage             `json:"token_usage"`
 	Steps                   []Step                 `json:"steps,omitempty"`
 	Events                  []Event                `json:"events,omitempty"`

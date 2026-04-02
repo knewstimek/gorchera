@@ -1398,6 +1398,36 @@ func TestSessionManagerFallsBackToSecondaryProvider(t *testing.T) {
 	}
 }
 
+func TestSessionManagerDoesNotRetryFallbackModelAfterFallbackProviderSelection(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	adapter := &alwaysFailingLeaderAdapter{name: domain.ProviderName("fallback-provider")}
+	registry.Register(adapter)
+
+	manager := NewSessionManager(registry)
+	_, err := manager.RunLeader(context.Background(), domain.Job{
+		Provider: domain.ProviderName("unused-primary"),
+		RoleProfiles: domain.RoleProfiles{
+			Leader: domain.ExecutionProfile{
+				Provider:         domain.ProviderName("missing-primary"),
+				FallbackProvider: adapter.name,
+				Model:            "primary-model",
+				FallbackModel:    "fallback-model",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected fallback provider error")
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("expected fallback provider to run once without model retry, got %d calls", adapter.calls)
+	}
+	if len(adapter.models) != 1 || adapter.models[0] != "primary-model" {
+		t.Fatalf("expected only the primary model attempt on fallback provider, got %v", adapter.models)
+	}
+}
+
 type leaderOnlyAdapter struct {
 	name domain.ProviderName
 }

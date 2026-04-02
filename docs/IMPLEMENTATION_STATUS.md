@@ -37,10 +37,21 @@ go test ./...    # PASS
   - Startup recovery is disabled by default, even for `serve` / `mcp`.
   - Operators must opt in explicitly with `-recover` or `-recover-jobs job1,job2`.
   - `-recover-jobs` limits startup recovery to the selected recoverable job IDs.
+  - Active jobs keep lightweight lease files under `.gorchera/leases/`.
+  - `InterruptRecoverableJobs()` only blocks stale recoverable jobs whose lease heartbeat expired.
+  - `Shutdown()` marks still-owned recoverable jobs as interrupted instead of leaving them in `waiting_*`.
+  - `serve` / `mcp` run the stale-job sweep automatically before serving traffic; one-shot CLI commands stay read-only unless they are explicit control actions.
+- Workspace isolation:
+  - `workspace_mode=shared` keeps the requested workspace unchanged.
+  - `workspace_mode=isolated` creates a detached git worktree at repository `HEAD`.
+  - The job stores both `RequestedWorkspaceDir` and the actual isolated `WorkspaceDir`.
+  - Promotion from isolated workspaces is manual for now; the detached worktree stays available for supervised diff review and merge.
 - MCP stdio smoke coverage:
   - `cmd/mcp-smoke` runs isolated end-to-end MCP scenarios against a real `gorchera mcp` subprocess.
   - `basic` validates `initialize -> tools/list -> start_job -> status(wait=true)` using the mock provider.
+  - `isolated` validates `workspace_mode=isolated` end-to-end and confirms the job runs inside a detached git worktree instead of the requested workspace.
   - `recovery` seeds recoverable jobs under an isolated `.gorchera` root, restarts `mcp`, and verifies startup recovery completes only the explicitly requested jobs without touching the main workspace state.
+  - `interrupt` seeds stale recoverable jobs, starts `mcp` without recovery flags, and verifies startup interruption blocks them by default.
 - Model-aware token/cost accounting:
   - token counts remain heuristic (`~4 chars/token`)
   - estimated cost now uses provider/model-specific input/output pricing instead of a single flat per-token constant
@@ -70,6 +81,7 @@ go test ./...    # PASS
   - job provider third
   - `mock` fallback last
 - MCP `gorchera_start_job` now accepts a structured `role_overrides` object with per-role `provider` / `model` overrides and persists it onto the started job.
+- MCP and HTTP job start surfaces now also accept `workspace_mode` (`shared` | `isolated`).
 - `fallback_provider` is honored if the primary provider lookup fails.
 - `fallback_model` is honored narrowly at runtime:
   - exactly one retry on the already-selected provider adapter
@@ -203,6 +215,7 @@ All 10 HIGH severity findings from `docs/AUDIT_REPORT.md` have been fixed. `go b
 - HTTP `POST /jobs` accepts role profiles and max steps, but it does not expose `strictness_level` or `context_mode`.
 - CLI `run` exposes `strictness` but does not expose `context_mode`.
 - Chain lifecycle is exposed through MCP and service methods, but not through CLI or HTTP routes.
+- Isolated worktree mode currently applies to single-job starts only; chain goals still run in the shared workspace passed to `StartChain()`.
 - `Step.DiffSummary` is only populated for successful single-worker steps. Parallel worker steps do not currently collect a diff summary.
 
 ## Not Implemented

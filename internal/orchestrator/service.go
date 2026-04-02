@@ -24,6 +24,7 @@ import (
 )
 
 var ErrHarnessOwnershipMismatch = errors.New("harness process not owned by job")
+var errServiceShuttingDown = errors.New("service is shutting down")
 
 const (
 	providerRetryLimit     = 3
@@ -44,6 +45,7 @@ type CreateJobInput struct {
 	Goal            string
 	TechStack       string
 	WorkspaceDir    string
+	WorkspaceMode   string
 	Constraints     []string
 	DoneCriteria    []string
 	Provider        domain.ProviderName
@@ -64,6 +66,7 @@ type Service struct {
 	runtime       *runtimeexec.Runner
 	processes     *runtimeexec.ProcessManager
 	workspaceRoot string
+	instanceID    string
 
 	// eventChan delivers job state change notifications to external listeners
 	// (e.g. the MCP server). Buffered so callers never block when no listener
@@ -86,6 +89,9 @@ type Service struct {
 
 	runMu       sync.Mutex
 	runningJobs map[string]struct{}
+	bgMu        sync.Mutex
+	bgClosed    bool
+	bgWG        sync.WaitGroup
 }
 
 func NewService(sessions *provider.SessionManager, state *store.StateStore, artifacts *store.ArtifactStore, workspaceRoot string) *Service {
@@ -98,6 +104,7 @@ func NewService(sessions *provider.SessionManager, state *store.StateStore, arti
 		runtime:       runtimeexec.NewRunner(runtimeexec.NewDefaultPolicy()),
 		processes:     runtimeexec.NewProcessManager(runtimeexec.NewDefaultPolicy()),
 		workspaceRoot: workspaceRoot,
+		instanceID:    newServiceInstanceID(),
 		// Buffer 100 notifications so that burst events during a fast-running job
 		// do not stall the orchestrator goroutine even if the MCP listener lags.
 		eventChan:       make(chan EventNotification, 100),
@@ -111,10 +118,80 @@ func NewService(sessions *provider.SessionManager, state *store.StateStore, arti
 	}
 }
 
-// Shutdown cancels the service-level context, signalling all background job
-// goroutines to stop. It is safe to call multiple times.
+// Shutdown cancels the service-level context, signals background job
+// goroutines to stop, and waits for them to exit. It is safe to call multiple
+// times.
 func (s *Service) Shutdown() {
+	s.bgMu.Lock()
+	s.bgClosed = true
 	s.shutdownCancel()
+	s.bgMu.Unlock()
+	s.bgWG.Wait()
+	s.InterruptOwnedJobs()
+}
+
+// InterruptRecoverableJobs marks persisted non-terminal jobs as blocked with
+// an interruption reason instead of leaving them stranded in waiting_* states.
+// Jobs listed in skipJobIDs are left untouched so callers can explicitly
+// recover them instead.
+func (s *Service) InterruptRecoverableJobs(skipJobIDs []string) {
+	ctx := context.Background()
+	jobs, err := s.state.ListJobs(ctx)
+	if err != nil {
+		log.Printf("[gorchera] interrupt sweep: failed to list jobs: %v", err)
+		return
+	}
+	skip := make(map[string]struct{}, len(skipJobIDs))
+	for _, jobID := range skipJobIDs {
+		jobID = strings.TrimSpace(jobID)
+		if jobID != "" {
+			skip[jobID] = struct{}{}
+		}
+	}
+
+	interrupted := 0
+	now := time.Now().UTC()
+	for i := range jobs {
+		job := jobs[i]
+		if !isRecoverableJobStatus(job.Status) {
+			continue
+		}
+		if _, ok := skip[job.ID]; ok {
+			continue
+		}
+		if !s.isStaleJob(job, now) {
+			continue
+		}
+		if err := s.interruptJob(ctx, &job, startupInterruptionReason(job)); err != nil {
+			log.Printf("[gorchera] interrupt sweep: failed to block job %s: %v", job.ID, err)
+			continue
+		}
+		interrupted++
+	}
+	if interrupted > 0 {
+		log.Printf("[gorchera] interrupt sweep: blocked %d recoverable jobs", interrupted)
+	}
+}
+
+// InterruptOwnedJobs marks this service instance's recoverable jobs as blocked.
+// It is intended for graceful shutdown so stale jobs do not linger.
+func (s *Service) InterruptOwnedJobs() {
+	ctx := context.Background()
+	jobs, err := s.state.ListJobs(ctx)
+	if err != nil {
+		log.Printf("[gorchera] shutdown interrupt: failed to list jobs: %v", err)
+		return
+	}
+
+	for i := range jobs {
+		job := jobs[i]
+		if !isRecoverableJobStatus(job.Status) || job.RunOwnerID != s.instanceID {
+			continue
+		}
+		if err := s.interruptJob(ctx, &job, "orchestrator shutdown interrupted the active job"); err != nil {
+			log.Printf("[gorchera] shutdown interrupt: failed to block job %s: %v", job.ID, err)
+		}
+	}
 }
 
 // RecoverJobs resumes any jobs that were in a non-terminal state when the
@@ -165,20 +242,26 @@ func (s *Service) recoverJobs(jobIDs []string) {
 		return recoverable[i].UpdatedAt.Before(recoverable[j].UpdatedAt)
 	})
 
-	go func(jobs []domain.Job) {
+	if !s.startBackgroundTask(func() {
 		sem := make(chan struct{}, recoveryConcurrency)
-		for i := range jobs {
-			job := jobs[i]
+		for i := range recoverable {
+			job := recoverable[i]
 			log.Printf("[gorchera] recovery: scheduling job %s (status=%s)", job.ID, job.Status)
 			sem <- struct{}{}
-			go func(j domain.Job) {
+			j := job
+			if !s.startBackgroundTask(func() {
 				defer func() { <-sem }()
 				if _, err := s.runLoop(s.shutdownCtx, &j); err != nil {
 					log.Printf("[gorchera] recovery: job %s failed: %v", j.ID, err)
 				}
-			}(job)
+			}) {
+				<-sem
+				return
+			}
 		}
-	}(recoverable)
+	}) {
+		return
+	}
 
 	if len(filter) > 0 {
 		log.Printf("[gorchera] recovery: scheduled %d selected jobs with max concurrency %d", len(recoverable), recoveryConcurrency)
@@ -298,6 +381,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 
 func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 	now := time.Now().UTC()
+	jobID := newJobID(now)
 	if input.MaxSteps <= 0 {
 		input.MaxSteps = 8
 	}
@@ -305,26 +389,32 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		input.Provider = domain.ProviderMock
 	}
 	roleProfiles := input.RoleProfiles.Normalize(input.Provider)
+	workspaceDir, requestedWorkspaceDir, workspaceMode, err := prepareWorkspaceDir(s.workspaceRoot, input.WorkspaceDir, jobID, input.WorkspaceMode)
+	if err != nil {
+		return nil, err
+	}
 
 	job := &domain.Job{
-		ID:                   newJobID(now),
-		Goal:                 strings.TrimSpace(input.Goal),
-		TechStack:            strings.TrimSpace(input.TechStack),
-		WorkspaceDir:         firstNonEmpty(strings.TrimSpace(input.WorkspaceDir), s.workspaceRoot),
-		Constraints:          input.Constraints,
-		DoneCriteria:         input.DoneCriteria,
-		StrictnessLevel:      normalizeStrictnessLevel(input.StrictnessLevel),
-		ContextMode:          normalizeContextMode(input.ContextMode),
-		RoleProfiles:         roleProfiles,
-		RoleOverrides:        input.RoleOverrides,
-		ChainID:              strings.TrimSpace(input.ChainID),
-		ChainGoalIndex:       input.ChainGoalIndex,
-		Status:               domain.JobStatusStarting,
-		Provider:             input.Provider,
-		MaxSteps:             input.MaxSteps,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		LeaderContextSummary: fmt.Sprintf("Goal: %s", strings.TrimSpace(input.Goal)),
+		ID:                    jobID,
+		Goal:                  strings.TrimSpace(input.Goal),
+		TechStack:             strings.TrimSpace(input.TechStack),
+		WorkspaceDir:          workspaceDir,
+		RequestedWorkspaceDir: requestedWorkspaceDir,
+		WorkspaceMode:         workspaceMode,
+		Constraints:           input.Constraints,
+		DoneCriteria:          input.DoneCriteria,
+		StrictnessLevel:       normalizeStrictnessLevel(input.StrictnessLevel),
+		ContextMode:           normalizeContextMode(input.ContextMode),
+		RoleProfiles:          roleProfiles,
+		RoleOverrides:         input.RoleOverrides,
+		ChainID:               strings.TrimSpace(input.ChainID),
+		ChainGoalIndex:        input.ChainGoalIndex,
+		Status:                domain.JobStatusStarting,
+		Provider:              input.Provider,
+		MaxSteps:              input.MaxSteps,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		LeaderContextSummary:  fmt.Sprintf("Goal: %s", strings.TrimSpace(input.Goal)),
 	}
 	if err := ValidateWorkspaceDir(job.WorkspaceDir); err != nil {
 		return nil, err
@@ -334,6 +424,7 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 
 func (s *Service) startPreparedJob(ctx context.Context, job *domain.Job) (*domain.Job, error) {
 	s.addEvent(job, "job_created", "job created")
+	s.touch(job)
 	if err := s.state.SaveJob(ctx, job); err != nil {
 		return nil, err
 	}
@@ -341,16 +432,43 @@ func (s *Service) startPreparedJob(ctx context.Context, job *domain.Job) (*domai
 }
 
 func (s *Service) startPreparedJobAsync(ctx context.Context, job *domain.Job) error {
+	if !s.reserveBackgroundTask() {
+		return errServiceShuttingDown
+	}
 	s.addEvent(job, "job_created", "job created")
+	s.touch(job)
 	if err := s.state.SaveJob(ctx, job); err != nil {
+		s.bgWG.Done()
 		return err
 	}
 	go func() {
+		defer s.bgWG.Done()
 		if _, err := s.runLoop(s.shutdownCtx, job); err != nil {
 			log.Printf("[gorchera] async job %s failed: %v", job.ID, err)
 		}
 	}()
 	return nil
+}
+
+func (s *Service) reserveBackgroundTask() bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.bgClosed {
+		return false
+	}
+	s.bgWG.Add(1)
+	return true
+}
+
+func (s *Service) startBackgroundTask(fn func()) bool {
+	if !s.reserveBackgroundTask() {
+		return false
+	}
+	go func() {
+		defer s.bgWG.Done()
+		fn()
+	}()
+	return true
 }
 
 func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, workspaceDir string, index int, chainCtx *domain.ChainContext) error {
@@ -428,6 +546,7 @@ func (s *Service) Cancel(ctx context.Context, jobID, reason string) (*domain.Job
 	job.FailureReason = ""
 	job.PendingApproval = nil
 	job.LeaderContextSummary = job.BlockedReason
+	s.clearJobRuntimeState(job)
 	s.addEvent(job, "job_cancelled", job.BlockedReason)
 	s.touch(job)
 	if err := s.state.SaveJob(ctx, job); err != nil {
@@ -930,12 +1049,23 @@ func (s *Service) interruptChainGoalJob(ctx context.Context, chain *domain.JobCh
 	return firstNonEmpty(job.WorkspaceDir, s.workspaceRoot), nil
 }
 
-func (s *Service) runLoop(ctx context.Context, job *domain.Job) (*domain.Job, error) {
+func (s *Service) runLoop(ctx context.Context, job *domain.Job) (result *domain.Job, err error) {
 	if !s.claimJobRun(job.ID) {
 		log.Printf("[gorchera] suppressing duplicate runLoop for job %s", job.ID)
 		return s.latestJobSnapshot(job), nil
 	}
 	defer s.releaseJobRun(job.ID)
+	stopLease := s.startJobLease(job)
+	defer func() {
+		stopLease()
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled)) && isRecoverableJobStatus(job.Status) {
+			if interruptErr := s.interruptJob(context.Background(), job, "job interrupted while orchestrator context was cancelled"); interruptErr == nil {
+				result = job
+				err = nil
+			}
+		}
+		s.finalizeJobLease(job)
+	}()
 
 	if len(job.PlanningArtifacts) == 0 || strings.TrimSpace(job.SprintContractRef) == "" {
 		if err := s.ensurePlanning(ctx, job); err != nil {
@@ -951,6 +1081,9 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (*domain.Job, er
 	completionRetryStepCount := 0
 	consecutiveSummarizes := 0
 	for job.CurrentStep < job.MaxSteps {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		job.Status = domain.JobStatusWaitingLeader
 		s.touch(job)
 		s.addEvent(job, "leader_requested", "requesting leader action")
@@ -968,6 +1101,9 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (*domain.Job, er
 			return s.sessions.RunLeader(ctx, *job)
 		})
 		if err != nil {
+			if isShutdownInterruption(ctx, err) {
+				return s.blockJobWithEvent(context.Background(), job, "job_interrupted", "orchestrator shutdown interrupted the leader phase")
+			}
 			if action == provider.ProviderErrorActionBlock {
 				return s.blockJobWithEvent(ctx, job, "job_blocked", fmt.Sprintf("leader execution blocked: %v", err))
 			}
@@ -1068,6 +1204,7 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (*domain.Job, er
 			}
 			job.Status = domain.JobStatusDone
 			job.Summary = leader.Reason
+			s.clearJobRuntimeState(job)
 			s.addEvent(job, "job_completed", leader.Reason)
 			s.touch(job)
 			if err := s.state.SaveJob(ctx, job); err != nil {
@@ -1121,6 +1258,9 @@ func (s *Service) runWorkerStep(ctx context.Context, job *domain.Job, leader dom
 		return s.sessions.RunWorker(ctx, *job, task)
 	})
 	if err != nil {
+		if isShutdownInterruption(ctx, err) {
+			return s.interruptJob(context.Background(), job, "orchestrator shutdown interrupted the worker phase")
+		}
 		last := &job.Steps[len(job.Steps)-1]
 		reason := fmt.Sprintf("worker execution failed: %v", err)
 		if action == provider.ProviderErrorActionBlock {
@@ -1271,6 +1411,9 @@ func (s *Service) runSystemStepWithApproval(ctx context.Context, job *domain.Job
 
 	result, runErr := s.runtime.Run(ctx, req)
 	artifacts := []string(nil)
+	if isShutdownInterruption(ctx, runErr) {
+		return s.interruptJob(context.Background(), job, "orchestrator shutdown interrupted the system action")
+	}
 	if result.Command != "" {
 		artifacts, err = s.artifacts.MaterializeSystemResult(job.ID, step.Index, result)
 		if err != nil {
@@ -1319,6 +1462,7 @@ func (s *Service) runSystemStepWithApproval(ctx context.Context, job *domain.Job
 func (s *Service) failJob(ctx context.Context, job *domain.Job, reason string) (*domain.Job, error) {
 	job.Status = domain.JobStatusFailed
 	job.FailureReason = reason
+	s.clearJobRuntimeState(job)
 	s.addEvent(job, "job_failed", reason)
 	s.touch(job)
 	if err := s.state.SaveJob(ctx, job); err != nil {
@@ -1344,6 +1488,7 @@ func (s *Service) blockJobWithEvent(ctx context.Context, job *domain.Job, eventK
 	job.BlockedReason = reason
 	job.FailureReason = ""
 	job.LeaderContextSummary = sanitizeLeaderContext(reason)
+	s.clearJobRuntimeState(job)
 	s.addEvent(job, eventKind, reason)
 	s.touch(job)
 	if err := s.state.SaveJob(ctx, job); err != nil {
@@ -1353,6 +1498,10 @@ func (s *Service) blockJobWithEvent(ctx context.Context, job *domain.Job, eventK
 		return nil, err
 	}
 	return job, nil
+}
+
+func isShutdownInterruption(ctx context.Context, err error) bool {
+	return ctx != nil && errors.Is(ctx.Err(), context.Canceled) && errors.Is(err, context.Canceled)
 }
 
 func (s *Service) executeProviderPhase(ctx context.Context, job *domain.Job, phase string, invoke func() (string, error)) (string, provider.ProviderErrorAction, error) {
@@ -1691,7 +1840,15 @@ func (s *Service) jobHarnessPIDs(jobID string) []int {
 }
 
 func (s *Service) touch(job *domain.Job) {
-	job.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	job.UpdatedAt = now
+	if isRecoverableJobStatus(job.Status) {
+		job.RunOwnerID = s.instanceID
+		job.RunHeartbeatAt = now
+		return
+	}
+	job.RunOwnerID = ""
+	job.RunHeartbeatAt = time.Time{}
 }
 
 func (s *Service) touchChain(chain *domain.JobChain) {

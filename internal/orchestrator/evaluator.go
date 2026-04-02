@@ -18,6 +18,18 @@ func (s *Service) evaluateCompletion(ctx context.Context, job *domain.Job) (*dom
 	sprint := buildSprintContract(*job, buildPlanningArtifact(*job, nil))
 	providerReport, err := s.runEvaluatorPhase(ctx, job, verification, verificationPath)
 	if err != nil {
+		if isShutdownInterruption(ctx, err) {
+			if interruptErr := s.interruptJob(context.Background(), job, "orchestrator shutdown interrupted the evaluator phase"); interruptErr != nil {
+				return nil, interruptErr
+			}
+			return &domain.EvaluatorReport{
+				Status:      "blocked",
+				Passed:      false,
+				Score:       0,
+				Reason:      job.BlockedReason,
+				ContractRef: job.SprintContractRef,
+			}, nil
+		}
 		if unsupportedPhase(err) {
 			providerReport = deterministicEvaluatorReport(*job, verification, sprint)
 		} else {

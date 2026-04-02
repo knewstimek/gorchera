@@ -103,12 +103,12 @@ func (m *SessionManager) runPhase(ctx context.Context, job domain.Job, role doma
 
 func (m *SessionManager) runWithResolvedProfile(job domain.Job, role domain.RoleName, invoke func(Adapter, domain.Job) (string, error)) (string, error) {
 	effectiveJob, profile := m.resolveJobForRole(job, role)
-	adapter, err := m.adapterForProfile(profile)
+	adapter, usedFallbackProvider, err := m.adapterForProfileWithSource(profile)
 	if err != nil {
 		return "", err
 	}
 	output, err := invoke(adapter, effectiveJob)
-	if err == nil || !shouldRetryWithFallbackModel(profile, err) {
+	if err == nil || usedFallbackProvider || !shouldRetryWithFallbackModel(profile, err) {
 		return output, err
 	}
 
@@ -148,16 +148,21 @@ func (m *SessionManager) resolveProfile(job domain.Job, role domain.RoleName) do
 }
 
 func (m *SessionManager) adapterForProfile(profile domain.ExecutionProfile) (Adapter, error) {
+	adapter, _, err := m.adapterForProfileWithSource(profile)
+	return adapter, err
+}
+
+func (m *SessionManager) adapterForProfileWithSource(profile domain.ExecutionProfile) (Adapter, bool, error) {
 	if adapter, err := m.registry.Get(profile.Provider); err == nil {
-		return adapter, nil
+		return adapter, false, nil
 	} else if profile.FallbackProvider != "" && profile.FallbackProvider != profile.Provider {
 		if fallback, fallbackErr := m.registry.Get(profile.FallbackProvider); fallbackErr == nil {
-			return fallback, nil
+			return fallback, true, nil
 		} else {
-			return nil, fmt.Errorf("primary provider %s: %w; fallback provider %s: %v", profile.Provider, err, profile.FallbackProvider, fallbackErr)
+			return nil, false, fmt.Errorf("primary provider %s: %w; fallback provider %s: %v", profile.Provider, err, profile.FallbackProvider, fallbackErr)
 		}
 	} else {
-		return nil, err
+		return nil, false, err
 	}
 }
 

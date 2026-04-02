@@ -20,7 +20,7 @@ internal/
     evaluator.go                 -- Completion gate, evaluator merge, strictness-aware verification
     verification.go              -- Verification contract build/load/prompt helpers
     parallel.go                  -- Parallel worker fan-out (max 2, disjoint target/scope checks)
-    workspace.go                 -- Workspace path validation
+    workspace.go                 -- Workspace path validation and isolated git-worktree preparation
   policy/policy.go               -- Approval decisions for workspace/network/delete/deploy/command actions
   provider/
     provider.go                  -- Registry and role-aware adapter selection
@@ -67,6 +67,19 @@ Notes:
 - Recoverable jobs are the persisted non-terminal states: `starting`, `running`, `waiting_leader`, `waiting_worker`.
 - Recovery schedules jobs oldest-first with a bounded concurrency of 2 so a restart cannot stampede the provider with every stale job at once.
 - `RecoverSelectedJobs()` applies the same bounded scheduling, but only for the explicitly listed job IDs.
+- Active runs maintain a lightweight lease file under `.gorchera/leases/<job>.json`.
+- `InterruptRecoverableJobs()` only blocks stale recoverable jobs whose lease heartbeat has expired; fresh in-flight jobs are left alone.
+- `Shutdown()` cancels background work, waits for in-flight goroutines to exit, and then blocks any still-owned recoverable jobs with an interruption reason.
+- `gorchera serve` and `gorchera mcp` both run the stale-job sweep on startup before serving requests; one-shot CLI commands do not mutate job state just to inspect it.
+
+## Workspace Modes
+
+- `workspace_mode=shared` keeps `job.WorkspaceDir` equal to the requested workspace.
+- `workspace_mode=isolated` requires the requested workspace to be inside a git repository.
+- Isolated mode creates a detached git worktree at repository `HEAD` under a sibling `.gorchera-worktrees/<repo>/<job-id>/` directory.
+- If the requested workspace is a subdirectory inside the repo, the job workspace points at the matching subdirectory inside the detached worktree.
+- `RequestedWorkspaceDir` preserves the operator-supplied path; `WorkspaceDir` becomes the actual path used by providers, system commands, and diff collection.
+- Promotion is intentionally manual for now: review the detached worktree diff, then cherry-pick / copy / apply the approved changes back into the primary workspace.
 
 ## Core Loop
 
@@ -321,7 +334,7 @@ MCP (17 tools):
 - job tools: `gorchera_start_job`, `gorchera_list_jobs`, `gorchera_status`, `gorchera_events`, `gorchera_artifacts`, `gorchera_approve`, `gorchera_reject`, `gorchera_retry`, `gorchera_cancel`, `gorchera_resume`
 - chain tools: `gorchera_start_chain`, `gorchera_chain_status`, `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, `gorchera_skip_chain_goal`
 - steer tool: `gorchera_steer`
-- `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `max_steps`, `strictness_level`, `context_mode` (supports `auto`)
+- `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `workspace_mode`, `max_steps`, `strictness_level`, `context_mode` (supports `auto`)
 - `gorchera_start_chain` key parameters: `workspace_dir`, `goals[]` with per-goal `goal`, `provider`, `strictness_level`, `context_mode`, `max_steps`, `role_overrides`
 - `wait=true` is supported on `gorchera_status` and `gorchera_chain_status` with 2-second polling
 - Omitted `wait_timeout` defaults to 30 seconds; `wait_timeout=0` preserves the 5-minute maximum

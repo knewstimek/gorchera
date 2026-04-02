@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -214,6 +215,91 @@ func TestServiceStartAsyncAcceptsExistingWorkspace(t *testing.T) {
 				t.Fatalf("timed out waiting for evaluation_blocked event for job %s", job.ID)
 			}
 		}
+	}
+}
+
+func TestServiceStartAsyncCreatesIsolatedWorkspaceFromGitHead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	workspace := newGitWorkspace(t)
+	registry := provider.NewRegistry()
+	registry.Register(completeImmediatelyProvider{})
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		workspace,
+	)
+
+	job, err := service.StartAsync(context.Background(), orchestrator.CreateJobInput{
+		Goal:          "Accept an isolated git worktree workspace",
+		Provider:      domain.ProviderName("complete-immediately"),
+		WorkspaceDir:  workspace,
+		WorkspaceMode: string(domain.WorkspaceModeIsolated),
+		MaxSteps:      8,
+	})
+	if err != nil {
+		t.Fatalf("StartAsync returned error: %v", err)
+	}
+	if job.WorkspaceMode != string(domain.WorkspaceModeIsolated) {
+		t.Fatalf("expected isolated workspace mode, got %q", job.WorkspaceMode)
+	}
+	if job.RequestedWorkspaceDir != workspace {
+		t.Fatalf("expected requested workspace dir %q, got %q", workspace, job.RequestedWorkspaceDir)
+	}
+	if job.WorkspaceDir == workspace {
+		t.Fatal("expected isolated workspace dir to differ from the requested workspace")
+	}
+	if !strings.Contains(job.WorkspaceDir, filepath.Join(".gorchera-worktrees", filepath.Base(workspace), job.ID)) {
+		t.Fatalf("expected isolated workspace under .gorchera-worktrees, got %q", job.WorkspaceDir)
+	}
+	if err := orchestrator.ValidateWorkspaceDir(job.WorkspaceDir); err != nil {
+		t.Fatalf("expected isolated workspace to validate: %v", err)
+	}
+	if topLevel := gitOutput(t, job.WorkspaceDir, "rev-parse", "--show-toplevel"); filepath.Clean(topLevel) != filepath.Clean(job.WorkspaceDir) {
+		t.Fatalf("expected isolated worktree top-level %q, got %q", job.WorkspaceDir, topLevel)
+	}
+}
+
+func TestServiceStartAsyncReturnsErrorAfterShutdown(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	workspace := t.TempDir()
+	registry := provider.NewRegistry()
+	registry.Register(completeImmediatelyProvider{})
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	service.Shutdown()
+
+	_, err := service.StartAsync(context.Background(), orchestrator.CreateJobInput{
+		Goal:         "Reject async starts after shutdown",
+		Provider:     domain.ProviderName("complete-immediately"),
+		WorkspaceDir: workspace,
+		MaxSteps:     8,
+	})
+	if err == nil {
+		t.Fatal("expected shutdown error")
+	}
+	if !strings.Contains(err.Error(), "service is shutting down") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	jobsDir := filepath.Join(root, "state", "jobs")
+	entries, readErr := os.ReadDir(jobsDir)
+	if readErr != nil {
+		t.Fatalf("expected jobs directory to exist after shutdown sweep, got error: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no persisted jobs after shutdown, found %d entries", len(entries))
 	}
 }
 
@@ -2094,6 +2180,76 @@ func TestServiceShutdownCancelsContext(t *testing.T) {
 	svc.Shutdown()
 }
 
+func TestServiceShutdownInterruptsOwnedRecoverableJobs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	adapter := &shutdownAwareProvider{name: domain.ProviderName("shutdown-aware")}
+	registry.Register(adapter)
+
+	svc := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		store.NewStateStore(filepath.Join(root, "state")),
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	job, err := svc.StartAsync(context.Background(), orchestrator.CreateJobInput{
+		Goal:     "Interrupt the active job on shutdown",
+		Provider: adapter.name,
+		MaxSteps: 2,
+	})
+	if err != nil {
+		t.Fatalf("StartAsync returned error: %v", err)
+	}
+
+	waitForJobStatus(t, svc, job.ID, domain.JobStatusWaitingLeader)
+	svc.Shutdown()
+
+	updated, err := svc.Get(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if updated.Status != domain.JobStatusBlocked {
+		t.Fatalf("expected blocked status after shutdown, got %s", updated.Status)
+	}
+	if !strings.Contains(updated.BlockedReason, "shutdown interrupted") {
+		t.Fatalf("expected shutdown interruption reason, got %q", updated.BlockedReason)
+	}
+	if updated.RunOwnerID != "" {
+		t.Fatalf("expected run owner to clear, got %q", updated.RunOwnerID)
+	}
+}
+
+func TestServiceRecoverJobsDoesNotScheduleAfterShutdown(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	control := newGatedLeaderProvider(domain.ProviderName("recover-shutdown"))
+	registry.Register(control)
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		stateStore,
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-after-shutdown")
+
+	service.Shutdown()
+	service.RecoverJobs()
+
+	select {
+	case <-control.started:
+		t.Fatal("expected shutdown service to skip recovery scheduling")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
 func TestServiceResumeSuppressesDuplicateRunLoop(t *testing.T) {
 	t.Parallel()
 
@@ -2163,6 +2319,7 @@ func TestServiceRecoverJobsCapsConcurrentRecovery(t *testing.T) {
 		store.NewArtifactStore(filepath.Join(root, "artifacts")),
 		root,
 	)
+	t.Cleanup(service.Shutdown)
 
 	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-1")
 	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-2")
@@ -2198,6 +2355,7 @@ func TestServiceRecoverSelectedJobsOnlySchedulesRequestedIDs(t *testing.T) {
 		store.NewArtifactStore(filepath.Join(root, "artifacts")),
 		root,
 	)
+	t.Cleanup(service.Shutdown)
 
 	saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-selected-1")
 	target := saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-recover-selected-2")
@@ -2214,6 +2372,74 @@ func TestServiceRecoverSelectedJobsOnlySchedulesRequestedIDs(t *testing.T) {
 
 	close(control.release)
 	waitForLeaderCalls(t, control, 1, 2*time.Second)
+}
+
+func TestServiceInterruptRecoverableJobsBlocksUnselectedJobs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	control := newGatedLeaderProvider(domain.ProviderName("interrupt-sweep"))
+	registry.Register(control)
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		stateStore,
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	blockedJob := saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-interrupt-1")
+	keptJob := saveRecoverableLeaderJob(t, stateStore, root, control.name, "job-interrupt-2")
+	blockedJob.RunOwnerID = "stale-owner"
+	blockedJob.RunHeartbeatAt = time.Now().UTC().Add(-2 * time.Minute)
+	if err := stateStore.SaveJob(context.Background(), blockedJob); err != nil {
+		t.Fatalf("failed to persist stale blocked job metadata: %v", err)
+	}
+	keptJob.RunOwnerID = "fresh-owner"
+	keptJob.RunHeartbeatAt = time.Now().UTC()
+	if err := stateStore.SaveJob(context.Background(), keptJob); err != nil {
+		t.Fatalf("failed to persist fresh kept job metadata: %v", err)
+	}
+
+	service.InterruptRecoverableJobs([]string{keptJob.ID})
+
+	updatedBlocked, err := service.Get(context.Background(), blockedJob.ID)
+	if err != nil {
+		t.Fatalf("Get blocked job returned error: %v", err)
+	}
+	if updatedBlocked.Status != domain.JobStatusBlocked {
+		t.Fatalf("expected interrupted job to become blocked, got %s", updatedBlocked.Status)
+	}
+	if !strings.Contains(updatedBlocked.BlockedReason, "interrupted") {
+		t.Fatalf("expected interruption reason, got %q", updatedBlocked.BlockedReason)
+	}
+
+	updatedKept, err := service.Get(context.Background(), keptJob.ID)
+	if err != nil {
+		t.Fatalf("Get kept job returned error: %v", err)
+	}
+	if updatedKept.Status != domain.JobStatusWaitingLeader {
+		t.Fatalf("expected selected job to remain recoverable, got %s", updatedKept.Status)
+	}
+}
+
+type shutdownAwareProvider struct {
+	name domain.ProviderName
+}
+
+func (p *shutdownAwareProvider) Name() domain.ProviderName {
+	return p.name
+}
+
+func (p *shutdownAwareProvider) RunLeader(ctx context.Context, _ domain.Job) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (p *shutdownAwareProvider) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
+	return `{"status":"success","summary":"unused","artifacts":[],"blocked_reason":"","error_reason":"","next_recommended_action":""}`, nil
 }
 
 type gatedLeaderProvider struct {
@@ -2310,4 +2536,43 @@ func waitForLeaderCalls(t *testing.T, provider *gatedLeaderProvider, want int, t
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d leader calls, got %d", want, provider.LeaderCalls())
+}
+
+func newGitWorkspace(t *testing.T) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is required for isolated workspace tests: %v", err)
+	}
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# test workspace\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed git workspace: %v", err)
+	}
+
+	gitRun(t, workspace, "init")
+	gitRun(t, workspace, "add", "README.md")
+	gitRun(t, workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	return workspace
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+	}
+	return strings.TrimSpace(string(output))
 }

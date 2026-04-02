@@ -134,9 +134,11 @@ func parseMCPOptions(args []string) (startupRecoverOptions, error) {
 
 func applyStartupRecovery(service *orchestrator.Service, opts startupRecoverOptions) {
 	if !opts.enabled {
+		service.InterruptRecoverableJobs(nil)
 		return
 	}
 	if len(opts.jobIDs) > 0 {
+		service.InterruptRecoverableJobs(opts.jobIDs)
 		service.RecoverSelectedJobs(opts.jobIDs)
 		return
 	}
@@ -151,6 +153,7 @@ func run(ctx context.Context, service *orchestrator.Service, args []string) {
 	doneCriteria := fs.String("done", "", "comma-separated done criteria")
 	providerName := fs.String("provider", string(domain.ProviderMock), "provider name")
 	profilesFile := fs.String("profiles-file", "", "path to a role profile JSON file")
+	workspaceMode := fs.String("workspace-mode", string(domain.WorkspaceModeShared), "workspace mode: shared | isolated")
 	maxSteps := fs.Int("max-steps", 8, "maximum worker steps")
 	strictness := fs.String("strictness", "normal", "evaluator strictness level: strict | normal | lenient")
 	fs.Parse(args)
@@ -168,6 +171,7 @@ func run(ctx context.Context, service *orchestrator.Service, args []string) {
 		Goal:            *goal,
 		TechStack:       *techStack,
 		WorkspaceDir:    currentWorkspace(),
+		WorkspaceMode:   *workspaceMode,
 		Constraints:     splitCSV(*constraints),
 		DoneCriteria:    splitCSV(*doneCriteria),
 		Provider:        domain.ProviderName(*providerName),
@@ -576,6 +580,7 @@ func serve(service *orchestrator.Service, args []string) {
 		log.Fatal(err)
 	}
 	applyStartupRecovery(service, recoverOpts)
+	defer service.Shutdown()
 
 	server := api.NewServer(service)
 	fmt.Printf("gorchera API listening on %s\n", addr)
@@ -588,6 +593,7 @@ func runMCP(service *orchestrator.Service, args []string) {
 		log.Fatal(err)
 	}
 	applyStartupRecovery(service, recoverOpts)
+	defer service.Shutdown()
 
 	mcpServer := mcp.NewServer(service)
 	if err := mcpServer.Run(); err != nil {
@@ -620,7 +626,8 @@ func printJSON(v any) {
 
 func usage() {
 	fmt.Println("gorchera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|mcp> [flags]")
-	fmt.Println("  serve/mcp startup recovery is disabled by default; use -recover or -recover-jobs job1,job2 to enable it explicitly.")
+	fmt.Println("  serve/mcp block stale interrupted jobs by default; use -recover or -recover-jobs job1,job2 to resume explicitly.")
+	fmt.Println("  run accepts -workspace-mode shared|isolated; isolated creates a detached git worktree for the job.")
 }
 
 func loadRoleProfiles(path string, base domain.ProviderName) (domain.RoleProfiles, error) {

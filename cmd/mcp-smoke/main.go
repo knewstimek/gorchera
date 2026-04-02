@@ -17,7 +17,7 @@ func main() {
 	fs := flag.NewFlagSet("mcp-smoke", flag.ExitOnError)
 	serverBin := fs.String("server-bin", "", "path to the gorchera binary to launch")
 	workdir := fs.String("workdir", "", "working directory for isolated smoke state")
-	scenario := fs.String("scenario", "basic", "scenario: basic | recovery")
+	scenario := fs.String("scenario", "basic", "scenario: basic | isolated | recovery | interrupt")
 	recoveryJobs := fs.Int("recovery-jobs", 3, "number of recoverable jobs to seed for recovery scenario")
 	keepWorkdir := fs.Bool("keep-workdir", false, "keep the smoke workdir after completion")
 	waitTimeout := fs.Duration("wait-timeout", 20*time.Second, "per-call MCP timeout")

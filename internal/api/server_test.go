@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -628,6 +629,7 @@ func TestServerCreatesJobFromAPI(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
+	workspace := newGitWorkspaceAPI(t)
 	registry := provider.NewRegistry()
 	registry.Register(mock.New())
 
@@ -642,8 +644,10 @@ func TestServerCreatesJobFromAPI(t *testing.T) {
 	defer server.Close()
 
 	reqBody := api.StartJobRequest{
-		Goal:     "Create a profile-driven job",
-		Provider: domain.ProviderMock,
+		Goal:          "Create a profile-driven job",
+		Provider:      domain.ProviderMock,
+		WorkspaceDir:  workspace,
+		WorkspaceMode: string(domain.WorkspaceModeIsolated),
 		RoleProfiles: domain.RoleProfiles{
 			Leader:   domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "leader-model", FallbackModel: "leader-fallback-model"},
 			Executor: domain.ExecutionProfile{Provider: domain.ProviderMock, Model: "executor-model"},
@@ -679,6 +683,15 @@ func TestServerCreatesJobFromAPI(t *testing.T) {
 	if job.RoleProfiles.Executor.Model != "executor-model" {
 		t.Fatalf("expected executor model to persist, got %q", job.RoleProfiles.Executor.Model)
 	}
+	if job.WorkspaceMode != string(domain.WorkspaceModeIsolated) {
+		t.Fatalf("expected isolated workspace mode, got %q", job.WorkspaceMode)
+	}
+	if job.RequestedWorkspaceDir != workspace {
+		t.Fatalf("expected requested workspace dir %q, got %q", workspace, job.RequestedWorkspaceDir)
+	}
+	if job.WorkspaceDir == workspace {
+		t.Fatal("expected isolated workspace dir to differ from requested workspace")
+	}
 
 	profileResp, err := http.Get(server.URL + "/jobs/" + job.ID + "/profile")
 	if err != nil {
@@ -707,6 +720,34 @@ type apiControlProvider struct {
 
 func (p apiControlProvider) Name() domain.ProviderName {
 	return p.name
+}
+
+func newGitWorkspaceAPI(t *testing.T) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is required for isolated workspace tests: %v", err)
+	}
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# api workspace\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed git workspace: %v", err)
+	}
+
+	gitRunAPI(t, workspace, "init")
+	gitRunAPI(t, workspace, "add", "README.md")
+	gitRunAPI(t, workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	return workspace
+}
+
+func gitRunAPI(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+	}
 }
 
 func (p apiControlProvider) RunLeader(_ context.Context, job domain.Job) (string, error) {

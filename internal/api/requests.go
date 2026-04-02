@@ -6,14 +6,15 @@ import (
 )
 
 type StartJobRequest struct {
-	Goal         string              `json:"goal"`
-	TechStack    string              `json:"tech_stack,omitempty"`
-	WorkspaceDir string              `json:"workspace_dir,omitempty"`
-	Constraints  []string            `json:"constraints,omitempty"`
-	DoneCriteria []string            `json:"done_criteria,omitempty"`
-	Provider     domain.ProviderName `json:"provider,omitempty"`
-	RoleProfiles domain.RoleProfiles `json:"role_profiles,omitempty"`
-	MaxSteps     int                 `json:"max_steps,omitempty"`
+	Goal          string              `json:"goal"`
+	TechStack     string              `json:"tech_stack,omitempty"`
+	WorkspaceDir  string              `json:"workspace_dir,omitempty"`
+	WorkspaceMode string              `json:"workspace_mode,omitempty"`
+	Constraints   []string            `json:"constraints,omitempty"`
+	DoneCriteria  []string            `json:"done_criteria,omitempty"`
+	Provider      domain.ProviderName `json:"provider,omitempty"`
+	RoleProfiles  domain.RoleProfiles `json:"role_profiles,omitempty"`
+	MaxSteps      int                 `json:"max_steps,omitempty"`
 }
 
 type CancelJobRequest struct {

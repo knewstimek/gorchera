@@ -18,6 +18,9 @@ func (s *Service) ensurePlanning(ctx context.Context, job *domain.Job) error {
 
 	plannerOutput, err := s.runPlannerPhase(ctx, job)
 	if err != nil {
+		if isShutdownInterruption(ctx, err) {
+			return s.interruptJob(context.Background(), job, "orchestrator shutdown interrupted the planner phase")
+		}
 		if unsupportedPhase(err) {
 			return s.persistPlanning(ctx, job, buildPlanningArtifact(*job, nil))
 		}

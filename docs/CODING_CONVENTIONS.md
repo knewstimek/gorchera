@@ -39,6 +39,15 @@ Guidelines:
 - Persist before starting asynchronous follow-up work.
 - Do not update chain state only in memory and then launch the next goal.
 - When a mutation changes terminal semantics, update both the in-memory struct and the persisted record before returning.
+- Recoverable-state cleanup must be lease-aware. Do not block fresh active jobs just because they are in `waiting_*`.
+- Interruption handling should convert stranded recoverable jobs into `blocked` with an explicit reason rather than silently dropping runtime ownership.
+
+## Workspace Rules
+
+- `WorkspaceDir` is the actual execution path. `RequestedWorkspaceDir` is the operator-supplied source workspace path.
+- `workspace_mode=isolated` stays opt-in and must prepare a detached git worktree instead of mutating the requested workspace directly.
+- Promotion from an isolated workspace is a supervisor/operator action; orchestrator code must not auto-merge detached worktree changes back into the primary workspace.
+- Chain goals still assume a shared workspace unless chain-specific isolation semantics are designed end-to-end.
 
 ## Provider Adapter Rules
 

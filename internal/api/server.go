@@ -82,14 +82,15 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		job, err := s.orchestrator.Start(r.Context(), orchestrator.CreateJobInput{
-			Goal:         req.Goal,
-			TechStack:    req.TechStack,
-			WorkspaceDir: req.WorkspaceDir,
-			Constraints:  req.Constraints,
-			DoneCriteria: req.DoneCriteria,
-			Provider:     req.Provider,
-			RoleProfiles: req.RoleProfiles,
-			MaxSteps:     req.MaxSteps,
+			Goal:          req.Goal,
+			TechStack:     req.TechStack,
+			WorkspaceDir:  req.WorkspaceDir,
+			WorkspaceMode: req.WorkspaceMode,
+			Constraints:   req.Constraints,
+			DoneCriteria:  req.DoneCriteria,
+			Provider:      req.Provider,
+			RoleProfiles:  req.RoleProfiles,
+			MaxSteps:      req.MaxSteps,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
