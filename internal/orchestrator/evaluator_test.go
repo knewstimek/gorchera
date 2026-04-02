@@ -1,31 +1,79 @@
 package orchestrator
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"gorchera/internal/domain"
 )
 
-func TestVerificationSatisfiedNormalAcceptsBuildWithoutReview(t *testing.T) {
+func TestVerificationSatisfiedNormalRequiresEngineEvidence(t *testing.T) {
 	t.Parallel()
 
+	// A step with no artifacts at all has no engine_build/engine_test paths,
+	// so it is treated as a legacy job and engine verification is skipped.
+	// Verification should pass (legacy compat -- see C1 fix).
 	job := domain.Job{
 		Steps: []domain.Step{
 			{TaskType: "implement", Status: domain.StepStatusSucceeded},
-			{TaskType: "build", Status: domain.StepStatusSucceeded},
 		},
 	}
 	contract := VerificationContract{
-		RequiredStepTypes: []string{"implement", "review", "test"},
+		RequiredStepTypes: []string{"implement"},
 	}
 
 	passed, missing := verificationSatisfiedNormal(job, contract)
 	if !passed {
-		t.Fatalf("expected normal verification to pass, missing=%v", missing)
+		t.Fatalf("expected legacy job (no engine artifacts) to pass verification, missing=%v", missing)
 	}
-	if len(missing) != 0 {
-		t.Fatalf("expected no missing coverage, got %v", missing)
+}
+
+func TestVerificationSatisfiedNormalRequiresEngineEvidenceWhenPathPresent(t *testing.T) {
+	t.Parallel()
+
+	// A step that has an engine_build artifact path but the file does not exist
+	// (or is unreadable) must NOT be treated as a legacy job -- the path signals
+	// that engine verification was attempted. Verification should fail.
+	job := domain.Job{
+		Steps: []domain.Step{
+			{
+				TaskType: "implement",
+				Status:   domain.StepStatusSucceeded,
+				// Non-existent path, but the filename contains "engine_build"
+				// so loadEngineCheckArtifacts will try (and fail) to read it.
+				Artifacts: []string{"/nonexistent/engine_build_0.json"},
+			},
+		},
+	}
+	contract := VerificationContract{
+		RequiredStepTypes: []string{"implement"},
+	}
+
+	passed, missing := verificationSatisfiedNormal(job, contract)
+	if passed {
+		t.Fatalf("expected verification to fail when engine artifact path is present but unreadable, missing=%v", missing)
+	}
+	if len(missing) == 0 {
+		t.Fatal("expected missing engine verification coverage")
+	}
+}
+
+func TestVerificationSatisfiedNormalAcceptsSkippedEngineChecks(t *testing.T) {
+	t.Parallel()
+
+	artifacts := writeEngineArtifactsForTest(t, engineCheckSkipped, engineCheckSkipped)
+	job := domain.Job{
+		Steps: []domain.Step{
+			{TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: artifacts},
+		},
+	}
+
+	passed, missing := verificationSatisfiedNormal(job, VerificationContract{RequiredStepTypes: []string{"implement"}})
+	if !passed {
+		t.Fatalf("expected skipped engine checks to satisfy coverage, missing=%v", missing)
 	}
 }
 
@@ -34,8 +82,7 @@ func TestMergeEvaluatorReportNormalIgnoresOptionalProviderMissing(t *testing.T) 
 
 	job := domain.Job{
 		Steps: []domain.Step{
-			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded},
-			{Target: "SYS", TaskType: "build", Status: domain.StepStatusSucceeded},
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
 		},
 	}
 	verification := VerificationContract{
@@ -75,7 +122,7 @@ func TestMergeEvaluatorReportRubricAllPass(t *testing.T) {
 
 	job := domain.Job{
 		Steps: []domain.Step{
-			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded},
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
 		},
 	}
 	verification := VerificationContract{
@@ -123,7 +170,7 @@ func TestMergeEvaluatorReportRubricAxisFail(t *testing.T) {
 
 	job := domain.Job{
 		Steps: []domain.Step{
-			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded},
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
 		},
 	}
 	verification := VerificationContract{
@@ -145,7 +192,7 @@ func TestMergeEvaluatorReportRubricAxisFail(t *testing.T) {
 		Reason: "implement succeeded",
 		RubricScores: []domain.RubricScore{
 			{Axis: "functionality", Score: 0.9},
-			{Axis: "test_coverage", Score: 0.5}, // below threshold 0.8
+			{Axis: "test_coverage", Score: 0.5},
 		},
 	}
 
@@ -178,12 +225,11 @@ func TestMergeEvaluatorReportNoRubric(t *testing.T) {
 
 	job := domain.Job{
 		Steps: []domain.Step{
-			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded},
+			{Target: "B", TaskType: "implement", Status: domain.StepStatusSucceeded, Artifacts: writeEngineArtifactsForTest(t, engineCheckPassed, engineCheckPassed)},
 		},
 	}
 	verification := VerificationContract{
 		RequiredStepTypes: []string{"implement"},
-		// no RubricAxes
 	}
 	sprint := domain.SprintContract{
 		RequiredStepTypes:   []string{"implement"},
@@ -209,13 +255,28 @@ func TestMergeEvaluatorReportNoRubric(t *testing.T) {
 	}
 }
 
-func TestBuildSprintContractNormalRequiresImplementOnly(t *testing.T) {
+func TestBuildSprintContractBalancedRequiresReview(t *testing.T) {
 	t.Parallel()
 
 	contract := buildSprintContract(domain.Job{
-		Goal:            "normal strictness contract",
-		StrictnessLevel: "normal",
-		DoneCriteria:    []string{"include system verification"},
+		Goal:         "balanced pipeline contract",
+		PipelineMode: string(domain.PipelineModeBalanced),
+	}, domain.PlanningArtifact{})
+
+	if len(contract.RequiredStepTypes) != 2 || contract.RequiredStepTypes[0] != "implement" || contract.RequiredStepTypes[1] != "review" {
+		t.Fatalf("expected implement and review to be required, got %v", contract.RequiredStepTypes)
+	}
+	if contract.ThresholdSuccessCnt != 2 {
+		t.Fatalf("expected success threshold 2, got %d", contract.ThresholdSuccessCnt)
+	}
+}
+
+func TestBuildSprintContractLightRequiresImplementOnly(t *testing.T) {
+	t.Parallel()
+
+	contract := buildSprintContract(domain.Job{
+		Goal:         "light pipeline contract",
+		PipelineMode: string(domain.PipelineModeLight),
 	}, domain.PlanningArtifact{})
 
 	if len(contract.RequiredStepTypes) != 1 || contract.RequiredStepTypes[0] != "implement" {
@@ -224,7 +285,46 @@ func TestBuildSprintContractNormalRequiresImplementOnly(t *testing.T) {
 	if contract.ThresholdSuccessCnt != 1 {
 		t.Fatalf("expected success threshold 1, got %d", contract.ThresholdSuccessCnt)
 	}
-	if contract.ThresholdMinSteps != 1 {
-		t.Fatalf("expected min steps threshold 1, got %d", contract.ThresholdMinSteps)
+}
+
+func writeEngineArtifactsForTest(t *testing.T, buildStatus, testStatus string) []string {
+	t.Helper()
+
+	dir := t.TempDir()
+	artifacts := []struct {
+		name   string
+		record EngineCheckArtifact
+	}{
+		{
+			name: "step-01-engine_build.json",
+			record: EngineCheckArtifact{
+				Kind:    "build",
+				Status:  buildStatus,
+				Command: "go build ./...",
+				Reason:  "test fixture",
+			},
+		},
+		{
+			name: "step-01-engine_test.json",
+			record: EngineCheckArtifact{
+				Kind:    "test",
+				Status:  testStatus,
+				Command: "go test ./...",
+				Reason:  "test fixture",
+			},
+		},
 	}
+	paths := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		path := filepath.Join(dir, artifact.name)
+		data, err := json.Marshal(artifact.record)
+		if err != nil {
+			t.Fatalf("failed to marshal engine artifact: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("failed to write engine artifact: %v", err)
+		}
+		paths = append(paths, path)
+	}
+	return paths
 }

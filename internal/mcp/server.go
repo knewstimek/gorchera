@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -26,19 +27,29 @@ import (
 // response goroutine (stdin loop) and the notification goroutine (listenEvents)
 // never interleave their output lines.
 type Server struct {
-	service *orchestrator.Service
-	mu      sync.Mutex
-	writer  io.Writer
+	service      *orchestrator.Service
+	mu           sync.Mutex
+	writer       io.Writer
+	pendingLines [][]byte
+
+	terminalMu   sync.Mutex
+	lastTerminal map[string]string
 }
 
 var (
 	statusWaitPollInterval = 2 * time.Second
 	statusWaitTimeout      = 5 * time.Minute
 	statusWaitDefault      = 30 * time.Second
+
+	terminalNotificationPollInterval = 25 * time.Millisecond
+	terminalNotificationTimeout      = 3 * time.Second
 )
 
 func NewServer(service *orchestrator.Service) *Server {
-	return &Server{service: service}
+	return &Server{
+		service:      service,
+		lastTerminal: make(map[string]string),
+	}
 }
 
 // writeMessage serialises msg to JSON and writes a single newline-terminated
@@ -51,9 +62,44 @@ func (s *Server) writeMessage(msg any) {
 		fmt.Fprintf(os.Stderr, "mcp: marshal error: %v\n", err)
 		return
 	}
+	s.writeRawLine(data)
+}
+
+func (s *Server) writeRawLine(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Fprintln(s.writer, string(data))
+	if s.writer == nil {
+		s.pendingLines = append(s.pendingLines, append([]byte(nil), data...))
+		return
+	}
+	if _, err := s.writer.Write(append(append([]byte(nil), data...), '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: write error: %v\n", err)
+	}
+}
+
+func (s *Server) installWriter(w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.writer = w
+	if s.writer == nil {
+		return
+	}
+	for _, line := range s.pendingLines {
+		if _, err := s.writer.Write(append(append([]byte(nil), line...), '\n')); err != nil {
+			fmt.Fprintf(os.Stderr, "mcp: write error: %v\n", err)
+			break
+		}
+	}
+	s.pendingLines = nil
+}
+
+func (s *Server) sendNotification(method string, params any) {
+	s.writeMessage(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	})
 }
 
 // listenEvents reads from the service event channel and forwards each event
@@ -61,25 +107,12 @@ func (s *Server) writeMessage(msg any) {
 // It runs in its own goroutine for the lifetime of Run().
 func (s *Server) listenEvents() {
 	for event := range s.service.EventChan() {
-		notification := map[string]any{
-			"jsonrpc": "2.0",
-			"method":  "notifications/message",
-			"params": map[string]any{
-				"level":  "info",
-				"logger": "gorchera",
-				"data": map[string]string{
-					"job_id":  event.JobID,
-					"kind":    event.Kind,
-					"message": event.Message,
-				},
-			},
-		}
-		s.writeMessage(notification)
+		s.handleEventNotification(event)
 	}
 }
 
 func (s *Server) Run() error {
-	s.writer = os.Stdout
+	s.installWriter(os.Stdout)
 
 	// Start notification relay before processing any requests so that events
 	// emitted by background jobs started earlier are not missed.
@@ -98,6 +131,187 @@ func (s *Server) Run() error {
 		}
 	}
 	return scanner.Err()
+}
+
+func (s *Server) RegisterTerminalCallback() {
+	rv := reflect.ValueOf(s.service)
+	method := rv.MethodByName("SetJobTerminalCallback")
+	if !method.IsValid() {
+		return
+	}
+	methodType := method.Type()
+	if methodType.NumIn() != 1 || methodType.NumOut() != 0 || methodType.In(0).Kind() != reflect.Func {
+		return
+	}
+	callbackType := methodType.In(0)
+	callback := reflect.MakeFunc(callbackType, func(args []reflect.Value) []reflect.Value {
+		go func(values []reflect.Value) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[gorchera] terminal callback panic recovered: %v", r)
+				}
+			}()
+			s.handleTerminalCallbackValues(values)
+		}(append([]reflect.Value(nil), args...))
+		return nil
+	})
+	method.Call([]reflect.Value{callback})
+}
+
+func (s *Server) handleEventNotification(event orchestrator.EventNotification) {
+	s.sendNotification("notifications/message", map[string]any{
+		"level":  "info",
+		"logger": "gorchera",
+		"data": map[string]string{
+			"job_id":  event.JobID,
+			"kind":    event.Kind,
+			"message": event.Message,
+		},
+	})
+
+	if clearsTerminalNotificationState(event.Kind) {
+		s.clearTerminalNotificationState(event.JobID)
+	}
+	if !mightProduceTerminalState(event.Kind) {
+		return
+	}
+	go s.awaitAndSendTerminalNotification(event.JobID)
+}
+
+func mightProduceTerminalState(kind string) bool {
+	switch kind {
+	case "job_blocked", "job_failed", "job_completed", "job_cancelled", "job_interrupted":
+		return true
+	default:
+		return false
+	}
+}
+
+func clearsTerminalNotificationState(kind string) bool {
+	switch kind {
+	case "job_created", "job_resumed", "job_retry_requested", "job_approved":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) clearTerminalNotificationState(jobID string) {
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+	delete(s.lastTerminal, jobID)
+}
+
+func (s *Server) handleTerminalCallbackValues(args []reflect.Value) {
+	switch len(args) {
+	case 1:
+		s.handleSingleTerminalCallbackArg(args[0])
+	case 3:
+		jobID := valueAsString(args[0])
+		status := terminalStatusFromValue(args[1])
+		summary := valueAsString(args[2])
+		if strings.TrimSpace(jobID) == "" || !isTerminalJobStatus(status) {
+			return
+		}
+		s.sendJobTerminalNotification(jobID, status, summary)
+	}
+}
+
+func (s *Server) handleSingleTerminalCallbackArg(arg reflect.Value) {
+	if !arg.IsValid() {
+		return
+	}
+	switch v := arg.Interface().(type) {
+	case domain.Job:
+		if isTerminalJobStatus(v.Status) {
+			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(&v))
+		}
+	case *domain.Job:
+		if v != nil && isTerminalJobStatus(v.Status) {
+			s.sendJobTerminalNotification(v.ID, v.Status, terminalSummary(v))
+		}
+	}
+}
+
+func valueAsString(v reflect.Value) string {
+	if !v.IsValid() {
+		return ""
+	}
+	if v.Kind() == reflect.String {
+		return v.String()
+	}
+	if status, ok := v.Interface().(domain.JobStatus); ok {
+		return string(status)
+	}
+	return fmt.Sprint(v.Interface())
+}
+
+func terminalStatusFromValue(v reflect.Value) domain.JobStatus {
+	if !v.IsValid() {
+		return ""
+	}
+	if status, ok := v.Interface().(domain.JobStatus); ok {
+		return status
+	}
+	if v.Kind() == reflect.String {
+		return domain.JobStatus(v.String())
+	}
+	return domain.JobStatus(fmt.Sprint(v.Interface()))
+}
+
+func (s *Server) awaitAndSendTerminalNotification(jobID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[gorchera] terminal notification panic recovered for job %s: %v", jobID, r)
+		}
+	}()
+
+	deadline := time.Now().Add(terminalNotificationTimeout)
+	for {
+		job, err := s.service.Get(context.Background(), jobID)
+		if err == nil && job != nil && isTerminalJobStatus(job.Status) {
+			s.sendJobTerminalNotification(job.ID, job.Status, terminalSummary(job))
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(terminalNotificationPollInterval)
+	}
+}
+
+func (s *Server) sendJobTerminalNotification(jobID string, status domain.JobStatus, summary string) {
+	signature := string(status) + "\x00" + summary
+
+	s.terminalMu.Lock()
+	if prev := s.lastTerminal[jobID]; prev == signature {
+		s.terminalMu.Unlock()
+		return
+	}
+	s.lastTerminal[jobID] = signature
+	s.terminalMu.Unlock()
+
+	s.sendNotification("notifications/job_terminal", map[string]any{
+		"job_id":  jobID,
+		"status":  status,
+		"summary": summary,
+	})
+}
+
+func terminalSummary(job *domain.Job) string {
+	if job == nil {
+		return ""
+	}
+	if strings.TrimSpace(job.Summary) != "" {
+		return job.Summary
+	}
+	if strings.TrimSpace(job.BlockedReason) != "" {
+		return job.BlockedReason
+	}
+	if strings.TrimSpace(job.FailureReason) != "" {
+		return job.FailureReason
+	}
+	return ""
 }
 
 // ---- JSON-RPC types --------------------------------------------------------
@@ -133,6 +347,9 @@ type schemaProp struct {
 	Type        string                `json:"type"`
 	Description string                `json:"description,omitempty"`
 	Default     any                   `json:"default,omitempty"`
+	Enum        []string              `json:"enum,omitempty"`
+	Minimum     *int                  `json:"minimum,omitempty"`
+	Maximum     *int                  `json:"maximum,omitempty"`
 	Properties  map[string]schemaProp `json:"properties,omitempty"`
 	Items       *schemaProp           `json:"items,omitempty"`
 	Required    []string              `json:"required,omitempty"`
@@ -216,9 +433,11 @@ func toolList() []toolDef {
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
 					"workspace_mode":   {Type: "string", Description: "Workspace mode: shared | isolated. isolated creates a detached git worktree rooted at HEAD for the job.", Default: "shared"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
+					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light | balanced | full. Omit to preserve balanced mode.", Default: "balanced", Enum: []string{"light", "balanced", "full"}},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
+					"role_overrides":   roleOverridesSchema(),
 				},
 				Required: []string{"goal"},
 			},
@@ -242,18 +461,7 @@ func toolList() []toolDef {
 								"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto (auto selects based on step count)", Default: "full"},
 								"max_steps":        {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
-								"role_overrides": {
-									Type:        "object",
-									Description: "Per-role provider/model overrides for this chain step",
-									Properties: map[string]schemaProp{
-										"planner":   {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-										"leader":    {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-										"executor":  {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-										"reviewer":  {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-										"tester":    {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-										"evaluator": {Type: "object", Properties: map[string]schemaProp{"provider": {Type: "string"}, "model": {Type: "string"}}},
-									},
-								},
+								"role_overrides":   roleOverridesSchema(),
 							},
 							Required: []string{"goal"},
 						},
@@ -413,7 +621,8 @@ func toolList() []toolDef {
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
-					"job_id": {Type: "string", Description: "Job ID"},
+					"job_id":      {Type: "string", Description: "Job ID"},
+					"extra_steps": boundedIntegerSchema("Optional max_steps extension for blocked max_steps_exceeded resumes.", 1, 20),
 				},
 				Required: []string{"job_id"},
 			},
@@ -443,6 +652,45 @@ func toolList() []toolDef {
 			},
 		},
 	}
+}
+
+func boundedIntegerSchema(description string, minimum, maximum int) schemaProp {
+	return schemaProp{
+		Type:        "integer",
+		Description: description,
+		Minimum:     intPtr(minimum),
+		Maximum:     intPtr(maximum),
+	}
+}
+
+func roleOverridesSchema() schemaProp {
+	return schemaProp{
+		Type:        "object",
+		Description: "Per-role provider/model overrides. Supports director-era roles and legacy planner/leader/tester compatibility during migration.",
+		Properties: map[string]schemaProp{
+			"director":  roleOverrideProfileSchema(),
+			"planner":   roleOverrideProfileSchema(),
+			"leader":    roleOverrideProfileSchema(),
+			"executor":  roleOverrideProfileSchema(),
+			"reviewer":  roleOverrideProfileSchema(),
+			"tester":    roleOverrideProfileSchema(),
+			"evaluator": roleOverrideProfileSchema(),
+		},
+	}
+}
+
+func roleOverrideProfileSchema() schemaProp {
+	return schemaProp{
+		Type: "object",
+		Properties: map[string]schemaProp{
+			"provider": {Type: "string"},
+			"model":    {Type: "string"},
+		},
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 // ---- Tool dispatch ---------------------------------------------------------
@@ -531,11 +779,22 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	workspaceDir := stringArg(args, "workspace_dir")
 	workspaceMode := stringArgDefault(args, "workspace_mode", string(domain.WorkspaceModeShared))
 	maxSteps := intArgDefault(args, "max_steps", 8)
+	pipelineMode := stringArgDefault(args, "pipeline_mode", "balanced")
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
 	ambitionLevel := stringArgDefault(args, "ambition_level", domain.AmbitionLevelMedium)
 	contextMode := stringArgDefault(args, "context_mode", "full")
 	if err := orchestrator.ValidateWorkspaceDir(workspaceDir); err != nil {
 		return toolResult{}, err
+	}
+	if err := validatePipelineMode(pipelineMode); err != nil {
+		return toolResult{}, err
+	}
+
+	var roleOverrides map[string]domain.RoleProfile
+	if roRaw, ok := args["role_overrides"]; ok {
+		if roMap, ok := roRaw.(map[string]any); ok {
+			roleOverrides = parseRoleOverrides(roMap)
+		}
 	}
 
 	input := orchestrator.CreateJobInput{
@@ -548,7 +807,9 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		AmbitionLevel:   ambitionLevel,
 		ContextMode:     contextMode,
 		RoleProfiles:    domain.DefaultRoleProfiles(provider),
+		RoleOverrides:   roleOverrides,
 	}
+	setOptionalStringField(&input, "PipelineMode", pipelineMode)
 
 	// StartAsync creates the job synchronously and runs the main loop in a
 	// background goroutine. This is necessary because runLoop is blocking and
@@ -968,13 +1229,17 @@ func (s *Server) toolResume(ctx context.Context, args map[string]any) (toolResul
 	if err != nil {
 		return toolResult{}, err
 	}
+	extraSteps, err := optionalExtraStepsArg(args)
+	if err != nil {
+		return toolResult{}, err
+	}
 	// Resume calls runLoop; run in background.
 	job, err := s.service.Get(ctx, jobID)
 	if err != nil {
 		return toolResult{}, err
 	}
 	go func() {
-		if _, err := s.service.Resume(context.Background(), jobID); err != nil {
+		if _, err := s.resumeJob(context.Background(), jobID, extraSteps); err != nil {
 			log.Printf("[gorchera] Resume failed for job %s: %v", jobID, err)
 		}
 	}()
@@ -982,6 +1247,9 @@ func (s *Server) toolResume(ctx context.Context, args map[string]any) (toolResul
 		"job_id":  job.ID,
 		"status":  job.Status,
 		"message": "resume submitted; job is resuming in background",
+	}
+	if extraSteps > 0 {
+		snapshot["extra_steps"] = extraSteps
 	}
 	return jsonResult(snapshot)
 }
@@ -1067,12 +1335,74 @@ func intArgDefault(args map[string]any, key string, def int) int {
 func intArg(args map[string]any, key string) (int, bool) {
 	switch v := args[key].(type) {
 	case float64:
+		if v != float64(int(v)) {
+			return 0, false
+		}
 		return int(v), true
 	case int:
 		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
 	}
 	return 0, false
 }
+
+func optionalExtraStepsArg(args map[string]any) (int, error) {
+	raw, ok := args["extra_steps"]
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	value, ok := intArg(map[string]any{"extra_steps": raw}, "extra_steps")
+	if !ok {
+		return 0, fmt.Errorf("extra_steps must be an integer")
+	}
+	if value < 1 || value > 20 {
+		return 0, fmt.Errorf("extra_steps must be between 1 and 20")
+	}
+	return value, nil
+}
+
+func validatePipelineMode(mode string) error {
+	switch mode {
+	case "light", "balanced", "full":
+		return nil
+	default:
+		return fmt.Errorf("pipeline_mode must be one of light, balanced, or full")
+	}
+}
+
+func setOptionalStringField(target any, fieldName, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	rv := reflect.ValueOf(target)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return
+	}
+	field := rv.Elem().FieldByName(fieldName)
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.String {
+		return
+	}
+	field.SetString(value)
+}
+
+func (s *Server) resumeJob(ctx context.Context, jobID string, extraSteps int) (*domain.Job, error) {
+	// ResumeWithOptions is the canonical resume method. It accepts ExtraSteps
+	// directly, so we don't need the old reflect-based ResumeWithExtraSteps
+	// fallback that never existed on the real Service.
+	return s.service.ResumeWithOptions(ctx, jobID, orchestrator.ResumeOptions{
+		ExtraSteps: extraSteps,
+	})
+}
+
 
 func statusWaitDuration(args map[string]any, wait bool) time.Duration {
 	if !wait {

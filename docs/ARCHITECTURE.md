@@ -46,6 +46,22 @@ Notes:
 - Token counts are estimated heuristically from serialized prompt/response size.
 - Estimated cost is model-aware: the orchestrator prices input and output tokens separately using provider/model pricing tables, while still excluding caching, batch discounts, and tool-specific surcharges.
 
+## Pipeline Topology
+
+Target execution pipeline:
+- `director -> executor -> [engine: go build ./... + go test ./...] -> reviewer -> evaluator`
+
+Pipeline modes:
+- `light`: skips reviewer but still requires the evaluator gate.
+- `balanced`: default mode; keeps reviewer and evaluator.
+- `full`: keeps reviewer/evaluator and enables heavier director orchestration patterns such as fix loops and parallel workers.
+
+Control-plane compatibility notes:
+- `gorchera_start_job` accepts `pipeline_mode`; omitted values are treated as `balanced`.
+- `gorchera_start_job` and `gorchera_start_chain` both accept `role_overrides`.
+- `gorchera_resume` accepts bounded optional `extra_steps` (1-20) for blocked `max_steps_exceeded` resumes.
+- MCP clients receive terminal notifications through `notifications/job_terminal` with `{job_id, status, summary}` once the terminal state is persisted.
+
 ## State Model
 
 ```text
@@ -73,6 +89,7 @@ Notes:
 - `InterruptRecoverableJobs()` only blocks stale recoverable jobs whose lease heartbeat has expired; fresh in-flight jobs are left alone.
 - `Shutdown()` cancels background work, waits for in-flight goroutines to exit, and then blocks any still-owned recoverable jobs with an interruption reason.
 - `gorchera serve` and `gorchera mcp` both run the stale-job sweep on startup before serving requests; one-shot CLI commands do not mutate job state just to inspect it.
+- MCP terminal notifications are buffered until stdio output is ready, and startup wiring registers the callback only after the recovery sweep completes.
 
 ## Workspace Modes
 
@@ -212,8 +229,8 @@ Leader prompt behavior:
 Model/provider selection is role-based, not job-global.
 
 Defaults from `DefaultRoleProfiles()`:
-- planner, leader, evaluator -> `opus`
-- executor, reviewer, tester -> `sonnet`
+- target pipeline: director, evaluator -> `opus`; executor, reviewer -> `sonnet`
+- migration compatibility: legacy planner/leader/tester override keys may still appear in persisted inputs while the director transition is being rolled out
 
 Resolution path in `SessionManager`:
 1. Read the role-specific execution profile
@@ -231,6 +248,7 @@ Adapter-specific model behavior:
 Role overrides on chains:
 - Each `ChainGoal` carries `RoleOverrides map[string]RoleProfile` alongside its other per-goal fields.
 - MCP `gorchera_start_chain` accepts a `role_overrides` object per goal entry.
+- MCP `gorchera_start_job` accepts the same `role_overrides` shape for single-job starts.
 - `startChainGoal()` copies `goal.RoleOverrides` into `CreateJobInput.RoleOverrides` when creating the job for that step.
 - Resolution priority inside the job: `RoleOverrides[role]` > `RoleProfiles[role]` > job provider > mock fallback.
 
@@ -346,16 +364,19 @@ HTTP API:
 - `/jobs/{id}/resume`, `/approve`, `/reject`, `/retry`, `/cancel`
 - `/harness/*` and `/jobs/{id}/harness/*`
 
-MCP (17 tools):
+MCP (17 tools + notifications):
 - job tools: `gorchera_start_job`, `gorchera_list_jobs`, `gorchera_status`, `gorchera_events`, `gorchera_artifacts`, `gorchera_approve`, `gorchera_reject`, `gorchera_retry`, `gorchera_cancel`, `gorchera_resume`
 - chain tools: `gorchera_start_chain`, `gorchera_chain_status`, `gorchera_pause_chain`, `gorchera_resume_chain`, `gorchera_cancel_chain`, `gorchera_skip_chain_goal`
 - steer tool: `gorchera_steer`
-- `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `workspace_mode`, `max_steps`, `strictness_level`, `context_mode` (supports `auto`)
-- `gorchera_start_job` also accepts `ambition_level` (`low | medium | high`, default `medium`)
+- `gorchera_start_job` key parameters: `goal`, `provider`, `workspace_dir`, `workspace_mode`, `max_steps`, `pipeline_mode`, `strictness_level`, `context_mode` (supports `auto`), `ambition_level`, `role_overrides`
 - `gorchera_start_chain` key parameters: `workspace_dir`, `goals[]` with per-goal `goal`, `provider`, `strictness_level`, `ambition_level`, `context_mode`, `max_steps`, `role_overrides`
+- `gorchera_resume` accepts optional bounded `extra_steps` (1-20)
 - `wait=true` is supported on `gorchera_status` and `gorchera_chain_status` with 2-second polling
 - Omitted `wait_timeout` defaults to 30 seconds; `wait_timeout=0` preserves the 5-minute maximum
 - Positive `wait_timeout` values are interpreted as seconds
+- MCP notifications:
+  - `notifications/message` for event streaming
+  - `notifications/job_terminal` for persisted final states (`done`, `failed`, `blocked`)
 
 ## Evaluator Rubric Scoring
 

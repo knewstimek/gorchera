@@ -293,6 +293,20 @@ func (s *Service) runParallelWorkerPlans(ctx context.Context, job *domain.Job, p
 		switch res.Worker.Status {
 		case "success":
 			step.Status = domain.StepStatusSucceeded
+			if err := s.runEngineVerificationForStep(ctx, job, step); err != nil {
+				return err
+			}
+			if step.Status == domain.StepStatusFailed {
+				if failedReason == "" {
+					failedReason = step.ErrorReason
+				}
+				// Persist immediately so a crash after engine verification
+				// does not lose the Failed status of this step.
+				if saveErr := s.state.SaveJob(ctx, job); saveErr != nil {
+					return saveErr
+				}
+				continue
+			}
 		case "blocked":
 			step.Status = domain.StepStatusBlocked
 			if blockedReason == "" {

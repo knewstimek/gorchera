@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ const (
 	providerRetryLimit     = 3
 	providerRetryBaseDelay = 250 * time.Millisecond
 	recoveryConcurrency    = 2
+	maxResumeExtraSteps    = 20
 )
 
 // EventNotification carries a job state change that the MCP server can relay
@@ -52,11 +54,16 @@ type CreateJobInput struct {
 	RoleProfiles    domain.RoleProfiles
 	RoleOverrides   map[string]domain.RoleProfile
 	MaxSteps        int
+	PipelineMode    string
 	StrictnessLevel string // strict | normal | lenient; empty defaults to "normal"
 	AmbitionLevel   string // low | medium | high; empty or unrecognized defaults to "medium"
 	ContextMode     string // full | summary | minimal; empty defaults to "full"
 	ChainID         string
 	ChainGoalIndex  int
+}
+
+type ResumeOptions struct {
+	ExtraSteps int
 }
 
 type Service struct {
@@ -365,6 +372,7 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 		chain.Goals[i] = domain.ChainGoal{
 			Goal:            strings.TrimSpace(goal.Goal),
 			Provider:        goal.Provider,
+			PipelineMode:    domain.NormalizePipelineMode(goal.PipelineMode),
 			StrictnessLevel: normalizeStrictnessLevel(goal.StrictnessLevel),
 			AmbitionLevel:   domain.NormalizeAmbitionLevel(goal.AmbitionLevel),
 			ContextMode:     normalizeContextMode(goal.ContextMode),
@@ -416,11 +424,12 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		WorkspaceMode:         workspaceMode,
 		Constraints:           input.Constraints,
 		DoneCriteria:          input.DoneCriteria,
+		PipelineMode:          domain.NormalizePipelineMode(input.PipelineMode),
 		StrictnessLevel:       normalizeStrictnessLevel(input.StrictnessLevel),
 		AmbitionLevel:         domain.NormalizeAmbitionLevel(input.AmbitionLevel),
 		ContextMode:           normalizeContextMode(input.ContextMode),
 		RoleProfiles:          roleProfiles,
-		RoleOverrides:         input.RoleOverrides,
+		RoleOverrides:         canonicalizeRoleOverrides(input.RoleOverrides),
 		ChainID:               strings.TrimSpace(input.ChainID),
 		ChainGoalIndex:        input.ChainGoalIndex,
 		Status:                domain.JobStatusStarting,
@@ -434,6 +443,52 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		return nil, err
 	}
 	return job, nil
+}
+
+func canonicalizeRoleOverrides(overrides map[string]domain.RoleProfile) map[string]domain.RoleProfile {
+	if len(overrides) == 0 {
+		return nil
+	}
+	canonical := make(map[string]domain.RoleProfile, len(overrides)+2)
+	for key, value := range overrides {
+		trimmed := strings.ToLower(strings.TrimSpace(key))
+		if trimmed == "" {
+			continue
+		}
+		canonical[trimmed] = value
+	}
+	if director, ok := canonical[string(domain.RoleDirector)]; ok {
+		if _, exists := canonical[string(domain.RolePlanner)]; !exists {
+			canonical[string(domain.RolePlanner)] = director
+		}
+		if _, exists := canonical[string(domain.RoleLeader)]; !exists {
+			canonical[string(domain.RoleLeader)] = director
+		}
+	}
+	return canonical
+}
+
+func (s *Service) applyResumeExtraSteps(ctx context.Context, job *domain.Job, extraSteps int) error {
+	if extraSteps <= 0 {
+		return nil
+	}
+	if job.Status != domain.JobStatusBlocked || job.BlockedReason != "max_steps_exceeded" {
+		return fmt.Errorf("extra_steps is only valid when resuming a max_steps_exceeded blocked job")
+	}
+	remaining := maxResumeExtraSteps - job.ResumeExtraStepsUsed
+	if remaining <= 0 {
+		return fmt.Errorf("resume extra step budget exhausted")
+	}
+	if extraSteps > remaining {
+		return fmt.Errorf("extra_steps exceeds remaining budget: requested=%d remaining=%d", extraSteps, remaining)
+	}
+	job.MaxSteps += extraSteps
+	job.ResumeExtraStepsUsed += extraSteps
+	job.BlockedReason = ""
+	job.FailureReason = ""
+	s.addEvent(job, "job_resume_extra_steps", fmt.Sprintf("extended max steps by %d to %d", extraSteps, job.MaxSteps))
+	s.touch(job)
+	return s.state.SaveJob(ctx, job)
 }
 
 func (s *Service) startPreparedJob(ctx context.Context, job *domain.Job) (*domain.Job, error) {
@@ -495,6 +550,7 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		Provider:        goal.Provider,
 		WorkspaceDir:    workspaceDir,
 		MaxSteps:        goal.MaxSteps,
+		PipelineMode:    goal.PipelineMode,
 		StrictnessLevel: goal.StrictnessLevel,
 		AmbitionLevel:   goal.AmbitionLevel,
 		ContextMode:     goal.ContextMode,
@@ -532,12 +588,19 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 }
 
 func (s *Service) Resume(ctx context.Context, jobID string) (*domain.Job, error) {
+	return s.ResumeWithOptions(ctx, jobID, ResumeOptions{})
+}
+
+func (s *Service) ResumeWithOptions(ctx context.Context, jobID string, options ResumeOptions) (*domain.Job, error) {
 	job, err := s.state.LoadJob(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
 	if job.Status == domain.JobStatusDone || job.Status == domain.JobStatusFailed {
 		return job, nil
+	}
+	if err := s.applyResumeExtraSteps(ctx, job, options.ExtraSteps); err != nil {
+		return nil, err
 	}
 	s.addEvent(job, "job_resumed", "job resumed")
 	return s.runLoop(ctx, job)
@@ -1168,7 +1231,7 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (result *domain.
 			}
 			return s.failJob(ctx, job, fmt.Sprintf("leader execution failed: %v", err))
 		}
-		s.accumulateTokenUsage(job, job.CurrentStep, estimateProviderUsage(*job, domain.RoleLeader, rawLeader, *job))
+		s.accumulateTokenUsage(job, job.CurrentStep, estimateProviderUsage(*job, domain.RoleDirector, rawLeader, *job))
 		job.SupervisorDirective = ""
 
 		var leader domain.LeaderOutput
@@ -1392,7 +1455,11 @@ func (s *Service) runWorkerStep(ctx context.Context, job *domain.Job, leader dom
 		last.DiffSummary = collectWorkspaceDiffSummary(ctx, firstNonEmpty(job.WorkspaceDir, s.workspaceRoot))
 		last.Status = domain.StepStatusSucceeded
 		job.Status = domain.JobStatusRunning
+		job.FailureReason = ""
 		s.addEvent(job, "worker_succeeded", worker.Summary)
+		if err := s.runEngineVerificationForStep(ctx, job, last); err != nil {
+			return err
+		}
 	case "blocked":
 		reason := firstNonEmpty(worker.BlockedReason, worker.Summary, "worker blocked")
 		last.StructuredReason = classifyWorkerFailure(nil, strings.Join([]string{worker.BlockedReason, worker.Summary, rawWorker}, "\n"))
@@ -1412,9 +1479,171 @@ func (s *Service) runWorkerStep(ctx context.Context, job *domain.Job, leader dom
 	}
 
 	job.LeaderContextSummary = worker.Summary
+	if strings.TrimSpace(last.Summary) != "" {
+		job.LeaderContextSummary = last.Summary
+	}
 	job.LeaderContextSummary = sanitizeLeaderContext(job.LeaderContextSummary)
 	s.touch(job)
 	return s.state.SaveJob(ctx, job)
+}
+
+func (s *Service) runEngineVerificationForStep(ctx context.Context, job *domain.Job, step *domain.Step) error {
+	if step == nil || !strings.EqualFold(step.TaskType, "implement") || step.Status != domain.StepStatusSucceeded {
+		return nil
+	}
+
+	records, summary, failureReason, err := s.executeEngineVerification(ctx, *job, step.Index)
+	if err != nil {
+		if isShutdownInterruption(ctx, err) || (ctx.Err() != nil && errors.Is(err, ctx.Err())) {
+			return s.interruptJob(context.Background(), job, "orchestrator shutdown interrupted engine verification")
+		}
+		_, failErr := s.failJob(ctx, job, fmt.Sprintf("engine verification failed: %v", err))
+		return failErr
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	artifactPaths := make([]string, 0, len(records))
+	for _, record := range records {
+		path, materializeErr := s.artifacts.MaterializeJSONArtifact(job.ID, engineVerificationArtifactName(step.Index, record.Kind), record)
+		if materializeErr != nil {
+			_, failErr := s.failJob(ctx, job, fmt.Sprintf("engine verification artifact materialization failed: %v", materializeErr))
+			return failErr
+		}
+		artifactPaths = append(artifactPaths, path)
+	}
+	step.Artifacts = append(step.Artifacts, artifactPaths...)
+	step.Summary = appendStepSummary(step.Summary, summary)
+
+	if failureReason != "" {
+		step.Status = domain.StepStatusFailed
+		step.ErrorReason = failureReason
+		job.Status = domain.JobStatusRunning
+		job.FailureReason = failureReason
+		s.addEvent(job, "engine_verification_failed", failureReason)
+		return nil
+	}
+
+	s.addEvent(job, "engine_verification_recorded", summary)
+	return nil
+}
+
+func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job, stepIndex int) ([]EngineCheckArtifact, string, string, error) {
+	workspaceDir := firstNonEmpty(job.WorkspaceDir, s.workspaceRoot)
+	if strings.TrimSpace(workspaceDir) == "" {
+		return engineSkippedArtifacts("workspace directory is not available"), "engine verification skipped: workspace directory is not available", "", nil
+	}
+	if _, err := s.runtime.LookPath("go"); err != nil {
+		return engineSkippedArtifacts("go executable is not available"), "engine verification skipped: go executable is not available", "", nil
+	}
+	if !hasGoWorkspace(workspaceDir) {
+		return engineSkippedArtifacts("workspace is not configured for Go"), "engine verification skipped: workspace is not configured for Go", "", nil
+	}
+
+	buildReq := runtimeexec.Request{
+		Category: runtimeexec.CategoryBuild,
+		Command:  "go",
+		Args:     []string{"build", "./..."},
+		Dir:      workspaceDir,
+		Timeout:  5 * time.Minute,
+	}
+	buildResult, buildErr := s.runtime.Run(ctx, buildReq)
+	if ctx.Err() != nil && (errors.Is(buildErr, context.Canceled) || errors.Is(buildErr, context.DeadlineExceeded)) {
+		return nil, "", "", buildErr
+	}
+	buildRecord := engineCheckFromResult("build", buildReq, buildResult, buildErr)
+	records := []EngineCheckArtifact{buildRecord}
+	summaryParts := []string{formatEngineCheckSummary(buildRecord)}
+	if buildErr != nil {
+		testRecord := EngineCheckArtifact{
+			Kind:    "test",
+			Status:  engineCheckSkipped,
+			Command: "go test ./...",
+			Reason:  "go build ./... failed",
+		}
+		records = append(records, testRecord)
+		summaryParts = append(summaryParts, formatEngineCheckSummary(testRecord))
+		return records, strings.Join(summaryParts, "; "), buildRecord.Reason, nil
+	}
+
+	testReq := runtimeexec.Request{
+		Category: runtimeexec.CategoryTest,
+		Command:  "go",
+		Args:     []string{"test", "./..."},
+		Dir:      workspaceDir,
+		Timeout:  5 * time.Minute,
+	}
+	testResult, testErr := s.runtime.Run(ctx, testReq)
+	if ctx.Err() != nil && (errors.Is(testErr, context.Canceled) || errors.Is(testErr, context.DeadlineExceeded)) {
+		return nil, "", "", testErr
+	}
+	testRecord := engineCheckFromResult("test", testReq, testResult, testErr)
+	records = append(records, testRecord)
+	summaryParts = append(summaryParts, formatEngineCheckSummary(testRecord))
+	if testErr != nil {
+		return records, strings.Join(summaryParts, "; "), testRecord.Reason, nil
+	}
+	return records, strings.Join(summaryParts, "; "), "", nil
+}
+
+func engineVerificationArtifactName(stepIndex int, kind string) string {
+	return fmt.Sprintf("step-%02d-engine_%s.json", stepIndex, kind)
+}
+
+func engineSkippedArtifacts(reason string) []EngineCheckArtifact {
+	return []EngineCheckArtifact{
+		{Kind: "build", Status: engineCheckSkipped, Command: "go build ./...", Reason: reason},
+		{Kind: "test", Status: engineCheckSkipped, Command: "go test ./...", Reason: reason},
+	}
+}
+
+func engineCheckFromResult(kind string, req runtimeexec.Request, result runtimeexec.Result, runErr error) EngineCheckArtifact {
+	record := EngineCheckArtifact{
+		Kind:    kind,
+		Status:  engineCheckPassed,
+		Command: strings.TrimSpace(strings.Join(append([]string{req.Command}, req.Args...), " ")),
+		Result:  &result,
+	}
+	if runErr != nil {
+		record.Status = engineCheckFailed
+		record.Reason = firstNonEmpty(strings.TrimSpace(result.Stderr), strings.TrimSpace(result.Stdout), runErr.Error())
+	}
+	return record
+}
+
+func formatEngineCheckSummary(record EngineCheckArtifact) string {
+	switch record.Status {
+	case engineCheckSkipped:
+		return fmt.Sprintf("%s skipped (%s)", record.Kind, record.Reason)
+	case engineCheckFailed:
+		return fmt.Sprintf("%s failed (%s)", record.Kind, record.Reason)
+	default:
+		return record.Kind + " passed"
+	}
+}
+
+func appendStepSummary(base, extra string) string {
+	base = strings.TrimSpace(base)
+	extra = strings.TrimSpace(extra)
+	switch {
+	case base == "":
+		return extra
+	case extra == "":
+		return base
+	default:
+		return base + "\nEngine verification: " + extra
+	}
+}
+
+func hasGoWorkspace(workspaceDir string) bool {
+	for _, name := range []string{"go.mod", "go.work"} {
+		if _, err := os.Stat(filepath.Join(workspaceDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) runSystemStep(ctx context.Context, job *domain.Job, leader domain.LeaderOutput) error {

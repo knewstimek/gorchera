@@ -176,7 +176,7 @@ func buildPlannerPrompt(job domain.Job) string {
 			job.ChainContext.Summary, job.ChainContext.EvaluatorReportRef)
 	}
 
-	// Build role profiles section so the planner knows which models handle each role.
+	// Build role profiles section so the director knows which models handle each role.
 	// This informs the recommended_strictness and recommended_max_steps decisions.
 	var roleProfilesSection strings.Builder
 	{
@@ -186,11 +186,9 @@ func buildPlannerPrompt(job domain.Job) string {
 			profile domain.ExecutionProfile
 		}
 		entries := []roleEntry{
-			{"planner", rp.Planner},
-			{"leader", rp.Leader},
+			{"director", rp.ProfileFor(domain.RoleDirector, job.Provider)},
 			{"executor", rp.Executor},
 			{"reviewer", rp.Reviewer},
-			{"tester", rp.Tester},
 			{"evaluator", rp.Evaluator},
 		}
 		roleProfilesSection.WriteString("\nRole profiles (which models handle each role):\n")
@@ -208,7 +206,7 @@ func buildPlannerPrompt(job domain.Job) string {
 	}
 
 	return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are a planner component operating under an orchestrator supervisor. The supervisor manages the overall workflow, and the leader uses your planning artifacts to coordinate executor, reviewer, and tester workers. You define scope and verification expectations but do not perform implementation yourself.
+TASK: You are a director planning component operating under an orchestrator supervisor. The supervisor manages the overall workflow, and you define the execution plan, sprint contract, and verification expectations that the director dispatch loop will enforce. You do not perform implementation yourself.
 The job data below is complete. Plan it now -- do not ask for more input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 
@@ -241,7 +239,7 @@ Output requirements (all fields required in JSON):
 - invariants_to_preserve: array of behaviors/contracts that must not break during implementation (use [] when none apply)
 - acceptance: array of measurable acceptance criteria
 - success_signals: observable signals that indicate success
-- recommended_strictness: recommend "strict", "normal", or "lenient" based on goal complexity and model capabilities. Stronger models (opus) can handle stricter evaluation and fewer steps; weaker models (sonnet, haiku) benefit from normal strictness and more steps. Use "strict" only for goals requiring review+test coverage with capable models; use "normal" for most goals; use "lenient" for simple or exploratory tasks.
+- recommended_strictness: recommend "strict", "normal", or "lenient" based on goal complexity and model capabilities. Stronger models (opus) can handle stricter evaluation and fewer steps; weaker models (sonnet, haiku) benefit from normal strictness and more steps. Use "strict" only for goals requiring tight review coverage with capable models; use "normal" for most goals; use "lenient" for simple or exploratory tasks.
 - recommended_max_steps: recommend the number of execution steps needed for this goal (minimum 1). Simpler goals with stronger models need fewer steps (e.g. 3-5); complex goals or weaker models may need more (e.g. 6-10).
 - verification_contract: object with version=1, goal=what to verify, required_artifacts=files that must exist after execution
 `, job.Goal, string(payload), chainSection, roleProfilesSection.String()))
@@ -292,7 +290,7 @@ func buildEvaluatorPrompt(job domain.Job) string {
 	}
 
 	return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are an evaluator component operating under an orchestrator supervisor. The supervisor monitors completion outcomes, and the leader plus workers provide the execution evidence you must assess. You verify results against the verification contract and report pass/fail/blocked decisions without performing implementation yourself.
+TASK: You are an evaluator component operating under an orchestrator supervisor. The supervisor monitors completion outcomes, and the director plus workers provide the execution evidence you must assess. You verify results against the verification contract and report pass/fail/blocked decisions without performing implementation yourself.
 The job data below is complete. Evaluate it now -- do not ask for more input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 
@@ -305,7 +303,7 @@ EVALUATION ROLE:
 Job goal: %s
 
 EVALUATION PROCEDURE:
-1. Inspect the verification contract, job summary, leader context, and full steps array.
+1. Inspect the verification contract, job summary, director context, and full steps array.
 2. Confirm whether the required evidence exists and whether the completed steps actually satisfy the goal.
 3. Treat failed or blocked execution evidence as a gate failure unless the evidence clearly shows the issue is unrelated to the requested outcome.
 4. Use status="passed" only when the contract is satisfied, the goal is achieved, and there is no material unresolved contradiction in the evidence.
@@ -339,28 +337,38 @@ func buildLeaderPrompt(job domain.Job) string {
 			}
 		}
 	}
+	pipelineMode := domain.NormalizePipelineMode(job.PipelineMode)
 	completionRules := []string{
 		`Completion rules:`,
 		`- Use action="complete" only when the sprint contract is satisfied and the goal is fully achieved.`,
+		`- Engine-managed go build ./... and go test ./... run automatically after each successful implement step. Do NOT dispatch tester work to reproduce that gate.`,
 		`- If required step coverage is missing, dispatch the missing work instead of choosing complete.`,
 		`- Do NOT use summarize as a substitute for complete. Summarize is only for recording intermediate progress between worker dispatches. If all required work is done and verified, choose complete immediately. Do not summarize more than once consecutively.`,
 		`- If the change touches lifecycle, restart, retry, recovery, concurrency, deduplication, external pricing/config, authentication boundaries, or UI/event-delivery boundaries, dispatch an explicit review step that hunts for regressions and counterexamples before choosing complete.`,
 	}
-	if strings.EqualFold(strictnessLevel, "strict") {
-		// Strict mode uses the sprint contract as a gate, so the leader must
-		// schedule each required worker phase before attempting completion.
+	switch pipelineMode {
+	case string(domain.PipelineModeLight):
 		completionRules = append(completionRules,
-			`- Strict mode is active. Before action="complete", you MUST dispatch and obtain succeeded worker steps for implement, then review, then test.`,
-			`- In strict mode, review must happen after implement succeeds, and test must happen after review succeeds.`,
-			`- If implement, review, or test is missing or not succeeded yet, choose run_worker or run_workers for the next required stage instead of complete.`,
+			`- Pipeline mode is light. Skip reviewer fan-out unless the supervisor explicitly asks for it or the goal is blocked without review evidence.`,
+		)
+	default:
+		completionRules = append(completionRules,
+			`- Pipeline mode requires reviewer coverage before completion. After implement succeeds, dispatch review or audit work before choosing complete.`,
+		)
+	}
+	if strings.EqualFold(strictnessLevel, "strict") {
+		completionRules = append(completionRules,
+			`- Strict mode is active. Do not choose complete until every required director stage has succeeded and the evaluator gate can pass without inference.`,
 		)
 	}
 	return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are a leader component operating under an orchestrator supervisor. The supervisor agent monitors your decisions via MCP tools and may inject [SUPERVISOR] directives as a separate supervisor directive. You coordinate workers (executor, reviewer, tester) but do not perform implementation yourself.
+TASK: You are a director dispatch component operating under an orchestrator supervisor. The supervisor agent monitors your decisions via MCP tools and may inject [SUPERVISOR] directives as a separate supervisor directive. You coordinate executor and reviewer workers, rely on engine-managed build/test verification, and do not perform implementation yourself.
 The job data below is complete. Decide and output the next action now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 
 Job goal: %s
+
+Pipeline mode: %s
 
 Valid actions (choose exactly one):
 - run_worker: assign a task to a single worker (target: "B", "C", or "D") -- PREFERRED for most tasks including file creation
@@ -397,7 +405,7 @@ Sprint contract:
 If the supervisor directive section is present, follow it with highest priority.
 Supervisor directives override previous plans.
 
-`, job.Goal, strings.Join(completionRules, "\n"), invariantsSection, supervisorSection, payload, contractPayload))
+`, job.Goal, pipelineMode, strings.Join(completionRules, "\n"), invariantsSection, supervisorSection, payload, contractPayload))
 }
 
 // autoContextMode selects a context mode based on step count thresholds.
@@ -669,7 +677,7 @@ func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
 		}
 	}
 	// Worker prompts are role-specific even though they share one transport.
-	// This keeps the planner broad while making reviewer/tester behavior
+	// This keeps the director broad while making reviewer behavior
 	// explicit and testable instead of relying on task_text phrasing alone.
 	switch domain.RoleForTaskType(task.TaskType) {
 	case domain.RoleReviewer:
@@ -678,7 +686,7 @@ func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
 			reviewerLabel = "audit"
 		}
 		return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are a reviewer component assigned by the leader. You are not the primary implementer for this step. Your job is to challenge the proposed change, look for counterexamples, and surface concrete risks before the job is allowed to complete.
+TASK: You are a reviewer component assigned by the director. You are not the primary implementer for this step. Your job is to challenge the proposed change, look for counterexamples, and surface concrete risks before the job is allowed to complete.
 The assigned %s task below is complete and ready to execute. Do it now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 status MUST be one of: success, failed, blocked.
@@ -716,45 +724,9 @@ Job state:
 Verification contract:
 %s
 `, reviewerLabel, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, reviewerLabel, string(taskPayload), string(jobPayload), contractPayload))
-	case domain.RoleTester:
-		return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are a tester component assigned by the leader. Your job is to verify behavior, challenge assumptions with runnable checks, and report whether the requested outcome is actually demonstrated.
-The assigned test task below is complete and ready to execute. Do it now -- do not ask for input.
-Output only a JSON object matching the schema. No conversation, no preamble.
-status MUST be one of: success, failed, blocked.
-
-Overall job goal: %s
-
-Task objective:
-%s
-
-Task why:
-%s
-
-Invariants to preserve:
-%s
-
-Scope boundary:
-%s
-
-Assigned test task payload:
-%s
-
-Testing procedure:
-- Prefer executable verification, observable evidence, and concrete failure reproduction.
-- Check that acceptance criteria and verification contract requirements are actually met.
-- Treat missing evidence, flaky outcomes, and inconsistent results as failures unless the missing dependency is truly external.
-- Report blocked only when the requested verification cannot proceed because required evidence or environment access is unavailable.
-
-Job state:
-%s
-
-Verification contract:
-%s
-`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, string(taskPayload), string(jobPayload), contractPayload))
 	}
 	return strings.TrimSpace(fmt.Sprintf(`
-TASK: You are an executor worker assigned by the leader. You perform the implementation task described below. Report results accurately including files changed, commands run, and any errors encountered.
+TASK: You are an executor worker assigned by the director. You perform the task described below. Report results accurately including files changed, commands run, and any errors encountered.
 The assigned task below is complete and ready to execute. Do it now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 status MUST be one of: success, failed, blocked.

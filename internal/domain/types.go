@@ -26,6 +26,14 @@ const (
 	WorkspaceModeIsolated WorkspaceMode = "isolated"
 )
 
+type PipelineMode string
+
+const (
+	PipelineModeLight    PipelineMode = "light"
+	PipelineModeBalanced PipelineMode = "balanced"
+	PipelineModeFull     PipelineMode = "full"
+)
+
 type StepStatus string
 
 const (
@@ -48,6 +56,7 @@ const (
 type RoleName string
 
 const (
+	RoleDirector  RoleName = "director"
 	RolePlanner   RoleName = "planner"
 	RoleLeader    RoleName = "leader"
 	RoleExecutor  RoleName = "executor"
@@ -78,50 +87,61 @@ type RoleProfile struct {
 }
 
 type RoleProfiles struct {
-	Planner   ExecutionProfile `json:"planner"`
-	Leader    ExecutionProfile `json:"leader"`
+	Director  ExecutionProfile `json:"director,omitempty"`
+	Planner   ExecutionProfile `json:"planner,omitempty"`
+	Leader    ExecutionProfile `json:"leader,omitempty"`
 	Executor  ExecutionProfile `json:"executor"`
 	Reviewer  ExecutionProfile `json:"reviewer"`
-	Tester    ExecutionProfile `json:"tester"`
+	Tester    ExecutionProfile `json:"tester,omitempty"`
 	Evaluator ExecutionProfile `json:"evaluator"`
 }
 
 func DefaultRoleProfiles(base ProviderName) RoleProfiles {
-	// Each role gets a sensible default model tier.
-	// Heavy reasoning roles (planner, leader, evaluator) use opus;
-	// execution roles (executor, reviewer, tester) use sonnet for speed/cost.
+	// Heavy reasoning roles (director, evaluator) use opus.
+	// Execution roles (executor, reviewer) use sonnet for speed/cost.
+	director := ExecutionProfile{Provider: base, Model: "opus"}
+	executor := ExecutionProfile{Provider: base, Model: "sonnet"}
 	return RoleProfiles{
-		Planner:   ExecutionProfile{Provider: base, Model: "opus"},
-		Leader:    ExecutionProfile{Provider: base, Model: "opus"},
-		Executor:  ExecutionProfile{Provider: base, Model: "sonnet"},
+		Director:  director,
+		Planner:   director,
+		Leader:    director,
+		Executor:  executor,
 		Reviewer:  ExecutionProfile{Provider: base, Model: "sonnet"},
-		Tester:    ExecutionProfile{Provider: base, Model: "sonnet"},
+		Tester:    executor,
 		Evaluator: ExecutionProfile{Provider: base, Model: "opus"},
 	}
 }
 
 func (r RoleProfiles) Normalize(base ProviderName) RoleProfiles {
-	r.Planner = r.Planner.withFallback(base)
-	r.Leader = r.Leader.withFallback(base)
+	r.Director = firstNonZeroProfile(r.Director, r.Planner, r.Leader).withFallback(base)
+	r.Planner = firstNonZeroProfile(r.Planner, r.Director).withFallback(base)
+	r.Leader = firstNonZeroProfile(r.Leader, r.Director).withFallback(base)
 	r.Executor = r.Executor.withFallback(base)
 	r.Reviewer = r.Reviewer.withFallback(base)
-	r.Tester = r.Tester.withFallback(base)
+	if isZeroExecutionProfile(r.Tester) {
+		r.Tester = r.Executor
+	} else {
+		r.Tester = r.Tester.withFallback(base)
+	}
 	r.Evaluator = r.Evaluator.withFallback(base)
 	return r
 }
 
 func (r RoleProfiles) ProfileFor(role RoleName, base ProviderName) ExecutionProfile {
+	director := firstNonZeroProfile(r.Director, r.Leader, r.Planner).withFallback(base)
 	switch role {
+	case RoleDirector:
+		return director
 	case RolePlanner:
-		return r.Planner.withFallback(base)
+		return firstNonZeroProfile(r.Planner, r.Director, r.Leader).withFallback(base)
 	case RoleLeader:
-		return r.Leader.withFallback(base)
+		return firstNonZeroProfile(r.Leader, r.Director, r.Planner).withFallback(base)
 	case RoleExecutor:
 		return r.Executor.withFallback(base)
 	case RoleReviewer:
 		return r.Reviewer.withFallback(base)
 	case RoleTester:
-		return r.Tester.withFallback(base)
+		return firstNonZeroProfile(r.Tester, r.Executor).withFallback(base)
 	case RoleEvaluator:
 		return r.Evaluator.withFallback(base)
 	default:
@@ -141,11 +161,22 @@ func RoleForTaskType(taskType string) RoleName {
 	case "review", "audit":
 		return RoleReviewer
 	case "test":
-		return RoleTester
+		return RoleExecutor
 	case "implement", "build", "lint", "search", "command":
 		return RoleExecutor
 	default:
 		return RoleExecutor
+	}
+}
+
+func NormalizePipelineMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case string(PipelineModeLight):
+		return string(PipelineModeLight)
+	case string(PipelineModeFull):
+		return string(PipelineModeFull)
+	default:
+		return string(PipelineModeBalanced)
 	}
 }
 
@@ -158,6 +189,19 @@ func NormalizeAmbitionLevel(level string) string {
 	default:
 		return AmbitionLevelMedium
 	}
+}
+
+func isZeroExecutionProfile(profile ExecutionProfile) bool {
+	return profile == (ExecutionProfile{})
+}
+
+func firstNonZeroProfile(values ...ExecutionProfile) ExecutionProfile {
+	for _, value := range values {
+		if !isZeroExecutionProfile(value) {
+			return value
+		}
+	}
+	return ExecutionProfile{}
 }
 
 type SystemActionType string
@@ -238,6 +282,7 @@ func ValidChainStatus(status ChainStatus) bool {
 type ChainGoal struct {
 	Goal            string                 `json:"goal"`
 	Provider        ProviderName           `json:"provider"`
+	PipelineMode    string                 `json:"pipeline_mode,omitempty"`
 	StrictnessLevel string                 `json:"strictness_level,omitempty"`
 	AmbitionLevel   string                 `json:"ambition_level,omitempty"`
 	ContextMode     string                 `json:"context_mode,omitempty"`
@@ -409,6 +454,7 @@ type Job struct {
 	WorkspaceMode           string                 `json:"workspace_mode,omitempty"`
 	Constraints             []string               `json:"constraints,omitempty"`
 	DoneCriteria            []string               `json:"done_criteria,omitempty"`
+	PipelineMode            string                 `json:"pipeline_mode,omitempty"`
 	StrictnessLevel         string                 `json:"strictness_level,omitempty"` // strict | normal | lenient
 	AmbitionLevel           string                 `json:"ambition_level,omitempty"`   // low | medium | high
 	ContextMode             string                 `json:"context_mode,omitempty"`     // full | summary | minimal
@@ -427,6 +473,7 @@ type Job struct {
 	MaxSteps                int                    `json:"max_steps"`
 	CurrentStep             int                    `json:"current_step"`
 	RetryCount              int                    `json:"retry_count"`
+	ResumeExtraStepsUsed    int                    `json:"resume_extra_steps_used,omitempty"`
 	BlockedReason           string                 `json:"blocked_reason,omitempty"`
 	FailureReason           string                 `json:"failure_reason,omitempty"`
 	PendingApproval         *PendingApproval       `json:"pending_approval,omitempty"`

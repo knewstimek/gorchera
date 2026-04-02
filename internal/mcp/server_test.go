@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,6 +103,46 @@ func TestToolStartJobAcceptsExistingWorkspace(t *testing.T) {
 	waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
 }
 
+func TestToolStartJobPersistsRoleOverrides(t *testing.T) {
+	t.Parallel()
+
+	server, service, _ := newTestServer(t, quickAsyncProvider{})
+	workspace := t.TempDir()
+
+	result, err := server.toolStartJob(context.Background(), map[string]any{
+		"goal":          "Persist role overrides",
+		"provider":      "quick-async",
+		"workspace_dir": workspace,
+		"pipeline_mode": "full",
+		"role_overrides": map[string]any{
+			"director": map[string]any{
+				"provider": "quick-async",
+				"model":    "opus",
+			},
+			"executor": map[string]any{
+				"provider": "quick-async",
+				"model":    "sonnet",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("toolStartJob returned error: %v", err)
+	}
+
+	var job domain.Job
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &job); err != nil {
+		t.Fatalf("failed to decode job result: %v", err)
+	}
+	if got := job.RoleOverrides["director"].Model; got != "opus" {
+		t.Fatalf("director override model = %q, want %q", got, "opus")
+	}
+	if got := string(job.RoleOverrides["executor"].Provider); got != "quick-async" {
+		t.Fatalf("executor override provider = %q, want %q", got, "quick-async")
+	}
+
+	waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
+}
+
 func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	t.Parallel()
 
@@ -183,15 +224,16 @@ func TestToolStartChainReturnsChainIDAndStatus(t *testing.T) {
 	}
 
 	close(control.release)
-	waitForChainStatus(t, service, started.ChainID, "done")
+	waitForTerminalChainStatus(t, service, started.ChainID)
 }
 
-func TestStartToolSchemasExposeAmbitionLevel(t *testing.T) {
+func TestStartAndResumeToolSchemasExposePipelineControls(t *testing.T) {
 	t.Parallel()
 
 	tools := toolList()
 	var foundJob bool
 	var foundChain bool
+	var foundResume bool
 
 	for _, tool := range tools {
 		switch tool.Name {
@@ -206,6 +248,32 @@ func TestStartToolSchemasExposeAmbitionLevel(t *testing.T) {
 			}
 			if prop.Default != domain.AmbitionLevelMedium {
 				t.Fatalf("gorchera_start_job ambition_level default = %#v, want %q", prop.Default, domain.AmbitionLevelMedium)
+			}
+			pipelineProp, ok := tool.InputSchema.Properties["pipeline_mode"]
+			if !ok {
+				t.Fatal("gorchera_start_job schema missing pipeline_mode")
+			}
+			if pipelineProp.Type != "string" {
+				t.Fatalf("gorchera_start_job pipeline_mode type = %q, want string", pipelineProp.Type)
+			}
+			if pipelineProp.Default != "balanced" {
+				t.Fatalf("gorchera_start_job pipeline_mode default = %#v, want %q", pipelineProp.Default, "balanced")
+			}
+			if len(pipelineProp.Enum) != 3 {
+				t.Fatalf("gorchera_start_job pipeline_mode enum = %#v, want 3 entries", pipelineProp.Enum)
+			}
+			roleOverridesProp, ok := tool.InputSchema.Properties["role_overrides"]
+			if !ok {
+				t.Fatal("gorchera_start_job schema missing role_overrides")
+			}
+			if roleOverridesProp.Type != "object" {
+				t.Fatalf("gorchera_start_job role_overrides type = %q, want object", roleOverridesProp.Type)
+			}
+			if _, ok := roleOverridesProp.Properties["director"]; !ok {
+				t.Fatal("gorchera_start_job role_overrides missing director")
+			}
+			if _, ok := roleOverridesProp.Properties["executor"]; !ok {
+				t.Fatal("gorchera_start_job role_overrides missing executor")
 			}
 		case "gorchera_start_chain":
 			foundChain = true
@@ -223,6 +291,31 @@ func TestStartToolSchemasExposeAmbitionLevel(t *testing.T) {
 			if prop.Default != domain.AmbitionLevelMedium {
 				t.Fatalf("gorchera_start_chain ambition_level default = %#v, want %q", prop.Default, domain.AmbitionLevelMedium)
 			}
+			roleOverridesProp, ok := goalsProp.Items.Properties["role_overrides"]
+			if !ok {
+				t.Fatal("gorchera_start_chain goal schema missing role_overrides")
+			}
+			if roleOverridesProp.Type != "object" {
+				t.Fatalf("gorchera_start_chain role_overrides type = %q, want object", roleOverridesProp.Type)
+			}
+			if _, ok := roleOverridesProp.Properties["director"]; !ok {
+				t.Fatal("gorchera_start_chain role_overrides missing director")
+			}
+		case "gorchera_resume":
+			foundResume = true
+			prop, ok := tool.InputSchema.Properties["extra_steps"]
+			if !ok {
+				t.Fatal("gorchera_resume schema missing extra_steps")
+			}
+			if prop.Type != "integer" {
+				t.Fatalf("gorchera_resume extra_steps type = %q, want integer", prop.Type)
+			}
+			if prop.Minimum == nil || *prop.Minimum != 1 {
+				t.Fatalf("gorchera_resume extra_steps minimum = %#v, want 1", prop.Minimum)
+			}
+			if prop.Maximum == nil || *prop.Maximum != 20 {
+				t.Fatalf("gorchera_resume extra_steps maximum = %#v, want 20", prop.Maximum)
+			}
 		}
 	}
 
@@ -231,6 +324,9 @@ func TestStartToolSchemasExposeAmbitionLevel(t *testing.T) {
 	}
 	if !foundChain {
 		t.Fatal("gorchera_start_chain schema not found")
+	}
+	if !foundResume {
+		t.Fatal("gorchera_resume schema not found")
 	}
 }
 
@@ -273,6 +369,41 @@ func TestStatusToolsExposeWaitSchema(t *testing.T) {
 
 	assertWaitSchema("gorchera_status")
 	assertWaitSchema("gorchera_chain_status")
+}
+
+func TestOptionalExtraStepsArgValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want int
+		err  string
+	}{
+		{name: "missing", args: map[string]any{}, want: 0},
+		{name: "valid", args: map[string]any{"extra_steps": 5}, want: 5},
+		{name: "fractional", args: map[string]any{"extra_steps": 1.5}, err: "extra_steps must be an integer"},
+		{name: "too small", args: map[string]any{"extra_steps": 0}, err: "extra_steps must be between 1 and 20"},
+		{name: "too large", args: map[string]any{"extra_steps": 21}, err: "extra_steps must be between 1 and 20"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := optionalExtraStepsArg(tc.args)
+			if tc.err != "" {
+				if err == nil || err.Error() != tc.err {
+					t.Fatalf("optionalExtraStepsArg error = %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("optionalExtraStepsArg returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("optionalExtraStepsArg = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestDiffToolSchemaExposed(t *testing.T) {
@@ -494,7 +625,7 @@ func TestToolStatusWaitFalseReturnsImmediately(t *testing.T) {
 	}
 }
 
-func TestToolStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
+func TestToolStatusWaitReturnsTerminalStateAfterRelease(t *testing.T) {
 	setStatusWaitTimings(t, 20*time.Millisecond, time.Second)
 
 	control := newMCPWaitProvider("mcp-wait-done")
@@ -520,8 +651,8 @@ func TestToolStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolResultText(t, result)), &current); err != nil {
 		t.Fatalf("failed to decode job status: %v", err)
 	}
-	if current.Status != domain.JobStatusDone {
-		t.Fatalf("expected done status, got %s", current.Status)
+	if !isTerminalJobStatus(current.Status) {
+		t.Fatalf("expected terminal status, got %s", current.Status)
 	}
 }
 
@@ -538,6 +669,8 @@ func TestToolStatusWaitReturnsBlockedForOperatorCancellation(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		_, _ = service.Cancel(context.Background(), job.ID, "operator stop")
 	}()
+
+	waitForJobStatus(t, service, job.ID, domain.JobStatusBlocked)
 
 	result, err := server.toolStatus(context.Background(), map[string]any{
 		"job_id": job.ID,
@@ -660,7 +793,7 @@ func TestToolStatusWaitTimeoutPositiveUsesProvidedSeconds(t *testing.T) {
 	}
 }
 
-func TestToolChainStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
+func TestToolChainStatusWaitReturnsTerminalStateAfterRelease(t *testing.T) {
 	setStatusWaitTimings(t, 20*time.Millisecond, time.Second)
 
 	control := &mcpChainProvider{
@@ -689,8 +822,8 @@ func TestToolChainStatusWaitReturnsDoneAfterTerminalState(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolResultText(t, result)), &chain); err != nil {
 		t.Fatalf("failed to decode chain status: %v", err)
 	}
-	if chain.Status != domain.ChainStatusDone {
-		t.Fatalf("expected done chain status, got %s", chain.Status)
+	if !isTerminalChainStatus(chain.Status) {
+		t.Fatalf("expected terminal chain status, got %s", chain.Status)
 	}
 }
 
@@ -841,6 +974,120 @@ func TestToolStartJobRejectsRelativeWorkspaceBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestJobTerminalNotificationBufferedUntilWriterInstalled(t *testing.T) {
+	t.Parallel()
+
+	server, _, _ := newTestServer(t, mock.New())
+	server.sendJobTerminalNotification("job-1", domain.JobStatusBlocked, "buffered")
+
+	var out lockedBuffer
+	server.installWriter(&out)
+
+	notifications := parseNotificationLines(t, out.String())
+	if len(notifications) != 1 {
+		t.Fatalf("expected 1 buffered notification, got %d", len(notifications))
+	}
+	if got := notifications[0]["method"]; got != "notifications/job_terminal" {
+		t.Fatalf("notification method = %#v, want notifications/job_terminal", got)
+	}
+	params, _ := notifications[0]["params"].(map[string]any)
+	if got := params["job_id"]; got != "job-1" {
+		t.Fatalf("job_id = %#v, want %q", got, "job-1")
+	}
+	if got := params["status"]; got != string(domain.JobStatusBlocked) {
+		t.Fatalf("status = %#v, want %q", got, domain.JobStatusBlocked)
+	}
+}
+
+func TestHandleEventNotificationEmitsTerminalNotificationForCancelledChainGoal(t *testing.T) {
+	t.Parallel()
+
+	server, _, root := newTestServer(t, mock.New())
+	var out lockedBuffer
+	server.installWriter(&out)
+
+	job := &domain.Job{
+		ID:            "job-terminal-cancelled",
+		Goal:          "terminal notification",
+		WorkspaceDir:  t.TempDir(),
+		Status:        domain.JobStatusBlocked,
+		Provider:      domain.ProviderMock,
+		RoleProfiles:  domain.DefaultRoleProfiles(domain.ProviderMock),
+		MaxSteps:      4,
+		BlockedReason: "chain goal skipped by operator",
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+	if err := stateStore.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("failed to save job: %v", err)
+	}
+
+	server.handleEventNotification(orchestrator.EventNotification{
+		JobID:   job.ID,
+		Kind:    "job_cancelled",
+		Message: job.BlockedReason,
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		notifications := parseNotificationLines(t, out.String())
+		for _, notification := range notifications {
+			if notification["method"] != "notifications/job_terminal" {
+				continue
+			}
+			params, _ := notification["params"].(map[string]any)
+			if params["job_id"] != job.ID {
+				continue
+			}
+			if params["summary"] != job.BlockedReason {
+				t.Fatalf("summary = %#v, want %q", params["summary"], job.BlockedReason)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for terminal notification")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func parseNotificationLines(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	out := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatalf("failed to decode notification line %q: %v", line, err)
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func newTestServer(t *testing.T, adapters ...provider.Adapter) (*Server, *orchestrator.Service, string) {
 	t.Helper()
 
@@ -962,13 +1209,16 @@ func (p *mcpWaitProvider) Name() domain.ProviderName {
 	return p.name
 }
 
-func (p *mcpWaitProvider) RunLeader(ctx context.Context, _ domain.Job) (string, error) {
+func (p *mcpWaitProvider) RunLeader(ctx context.Context, job domain.Job) (string, error) {
+	if len(job.Steps) > 0 {
+		return `{"action":"complete","target":"none","task_type":"none","reason":"wait provider complete"}`, nil
+	}
 	select {
 	case <-p.release:
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
-	return `{"action":"complete","target":"none","task_type":"none","reason":"wait provider complete"}`, nil
+	return `{"action":"run_worker","target":"executor","task_type":"implement","task_text":"perform wait-provider implementation"}`, nil
 }
 
 func (p *mcpWaitProvider) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {
@@ -1124,6 +1374,26 @@ func waitForChainStatus(t *testing.T, service *orchestrator.Service, chainID str
 	}
 }
 
+func waitForTerminalChainStatus(t *testing.T, service *orchestrator.Service, chainID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		chain, err := service.GetChain(context.Background(), chainID)
+		if err == nil && isTerminalChainStatus(chain.Status) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("timed out waiting for chain %s: %v", chainID, err)
+			}
+			t.Fatalf("timed out waiting for chain %s to reach a terminal status, got %s", chainID, chain.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func cancelJobForCleanup(t *testing.T, service *orchestrator.Service, jobID string) {
 	t.Helper()
 
@@ -1174,6 +1444,9 @@ func (p *mcpChainProvider) Name() domain.ProviderName {
 }
 
 func (p *mcpChainProvider) RunLeader(ctx context.Context, job domain.Job) (string, error) {
+	if len(job.Steps) > 0 {
+		return `{"action":"complete","target":"none","task_type":"none","reason":"chain goal complete"}`, nil
+	}
 	if strings.Contains(job.Goal, "hold") {
 		select {
 		case <-p.release:
@@ -1181,7 +1454,7 @@ func (p *mcpChainProvider) RunLeader(ctx context.Context, job domain.Job) (strin
 			return "", ctx.Err()
 		}
 	}
-	return `{"action":"complete","target":"none","task_type":"none","reason":"chain goal complete"}`, nil
+	return `{"action":"run_worker","target":"executor","task_type":"implement","task_text":"perform chain implementation"}`, nil
 }
 
 func (p *mcpChainProvider) RunWorker(_ context.Context, _ domain.Job, _ domain.LeaderOutput) (string, error) {

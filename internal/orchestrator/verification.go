@@ -8,34 +8,46 @@ import (
 	"strings"
 
 	"gorchera/internal/domain"
+	runtimeexec "gorchera/internal/runtime"
 )
 
 type VerificationContract struct {
-	Version              int                `json:"version"`
-	Goal                 string             `json:"goal"`
-	Summary              string             `json:"summary"`
-	SprintContractRef    string             `json:"sprint_contract_ref,omitempty"`
-	PlanningArtifactRefs []string           `json:"planning_artifact_refs,omitempty"`
-	RequiredStepTypes    []string           `json:"required_step_types,omitempty"`
-	AcceptanceCriteria   []string           `json:"acceptance_criteria,omitempty"`
-	TesterInstructions   []string           `json:"tester_instructions,omitempty"`
-	EvaluatorCriteria    []string           `json:"evaluator_criteria,omitempty"`
-	// RubricAxes mirrors domain.VerificationContract.RubricAxes when loaded
-	// from a persisted contract JSON. Used by mergeEvaluatorReport to enforce
-	// per-axis score thresholds returned by the evaluator provider.
+	Version              int                 `json:"version"`
+	Goal                 string              `json:"goal"`
+	Summary              string              `json:"summary"`
+	SprintContractRef    string              `json:"sprint_contract_ref,omitempty"`
+	PlanningArtifactRefs []string            `json:"planning_artifact_refs,omitempty"`
+	RequiredStepTypes    []string            `json:"required_step_types,omitempty"`
+	AcceptanceCriteria   []string            `json:"acceptance_criteria,omitempty"`
+	EngineInstructions   []string            `json:"engine_instructions,omitempty"`
+	EvaluatorCriteria    []string            `json:"evaluator_criteria,omitempty"`
 	RubricAxes           []domain.RubricAxis `json:"rubric_axes,omitempty"`
 }
 
+type EngineCheckArtifact struct {
+	Kind    string              `json:"kind"`
+	Status  string              `json:"status"`
+	Command string              `json:"command,omitempty"`
+	Reason  string              `json:"reason,omitempty"`
+	Result  *runtimeexec.Result `json:"result,omitempty"`
+}
+
+const (
+	engineCheckPassed  = "passed"
+	engineCheckFailed  = "failed"
+	engineCheckSkipped = "skipped"
+)
+
 func buildVerificationContract(job domain.Job, planning domain.PlanningArtifact, sprint domain.SprintContract, planningArtifactRefs []string) VerificationContract {
-	testerInstructions := []string{
-		"Read the verification contract before running tests.",
-		"Use the contract to choose only the tests needed for the current step.",
-		"Return the exact commands, outcomes, and artifacts produced.",
+	engineInstructions := []string{
+		"Engine runs go build ./... and go test ./... after each successful implement step when a Go workspace is configured.",
+		"Treat skipped engine checks as informational when the workspace is not configured for Go or the go tool is unavailable.",
+		"Treat failed engine checks as unresolved regression evidence until a later implement step replaces them.",
 	}
 	evaluatorCriteria := []string{
-		"tester output references the verification contract",
-		"tester output includes concrete artifacts or logs",
+		"latest successful implement step contains engine build/test evidence",
 		"required step coverage matches the sprint contract",
+		"review coverage matches the selected pipeline mode",
 	}
 	return VerificationContract{
 		Version:              1,
@@ -45,7 +57,7 @@ func buildVerificationContract(job domain.Job, planning domain.PlanningArtifact,
 		PlanningArtifactRefs: append([]string(nil), planningArtifactRefs...),
 		RequiredStepTypes:    append([]string(nil), sprint.RequiredStepTypes...),
 		AcceptanceCriteria:   append([]string(nil), sprint.AcceptanceCriteria...),
-		TesterInstructions:   testerInstructions,
+		EngineInstructions:   engineInstructions,
 		EvaluatorCriteria:    evaluatorCriteria,
 	}
 }
@@ -53,9 +65,13 @@ func buildVerificationContract(job domain.Job, planning domain.PlanningArtifact,
 func verificationSummary(job domain.Job, planning domain.PlanningArtifact, sprint domain.SprintContract) string {
 	required := strings.Join(sprint.RequiredStepTypes, ", ")
 	if required == "" {
-		required = "implement, review, test"
+		required = "implement"
 	}
-	return fmt.Sprintf("Verify %s with required steps: %s", firstNonEmptyValue(&planning, func(p *domain.PlanningArtifact) string { return p.Summary }, job.Goal), required)
+	return fmt.Sprintf(
+		"Verify %s with required worker steps: %s and engine-managed go build/go test evidence",
+		firstNonEmptyValue(&planning, func(p *domain.PlanningArtifact) string { return p.Summary }, job.Goal),
+		required,
+	)
 }
 
 func buildPersistedVerificationContract(job domain.Job, planning domain.PlanningArtifact, sprint domain.SprintContract, contract VerificationContract, contractPath string) *domain.VerificationContract {
@@ -86,7 +102,7 @@ func buildPersistedVerificationContract(job domain.Job, planning domain.Planning
 		Version:           contract.Version,
 		Goal:              firstNonEmptyValue(&planning, func(p *domain.PlanningArtifact) string { return p.Goal }, job.Goal),
 		Scope:             append([]string(nil), contract.AcceptanceCriteria...),
-		RequiredCommands:  append([]string(nil), contract.TesterInstructions...),
+		RequiredCommands:  append([]string(nil), contract.EngineInstructions...),
 		RequiredArtifacts: uniqueStrings(requiredArtifacts),
 		RequiredChecks:    uniqueStrings(requiredChecks),
 		DisallowedActions: []string{"self-approval", "unbounded parallel fan-out"},
@@ -130,7 +146,7 @@ func verificationContractPrompt(contract VerificationContract, path string) stri
 	b.WriteString(contract.Summary)
 	b.WriteString("\n")
 	if len(contract.RequiredStepTypes) > 0 {
-		b.WriteString("Required steps: ")
+		b.WriteString("Required worker steps: ")
 		b.WriteString(strings.Join(contract.RequiredStepTypes, ", "))
 		b.WriteString("\n")
 	}
@@ -142,9 +158,9 @@ func verificationContractPrompt(contract VerificationContract, path string) stri
 			b.WriteString("\n")
 		}
 	}
-	if len(contract.TesterInstructions) > 0 {
-		b.WriteString("Tester instructions:\n")
-		for _, item := range contract.TesterInstructions {
+	if len(contract.EngineInstructions) > 0 {
+		b.WriteString("Engine verification instructions:\n")
+		for _, item := range contract.EngineInstructions {
 			b.WriteString("- ")
 			b.WriteString(item)
 			b.WriteString("\n")
@@ -153,28 +169,96 @@ func verificationContractPrompt(contract VerificationContract, path string) stri
 	return strings.TrimSpace(b.String())
 }
 
-func latestTestStep(job *domain.Job) *domain.Step {
+func latestImplementStep(job *domain.Job) *domain.Step {
 	for i := len(job.Steps) - 1; i >= 0; i-- {
 		step := &job.Steps[i]
-		if strings.EqualFold(step.TaskType, "test") {
+		if strings.EqualFold(step.TaskType, "implement") {
 			return step
 		}
 	}
 	return nil
 }
 
+func loadEngineCheckArtifacts(step *domain.Step) map[string]EngineCheckArtifact {
+	if step == nil {
+		return nil
+	}
+	out := make(map[string]EngineCheckArtifact, 2)
+	for _, artifactPath := range step.Artifacts {
+		base := strings.ToLower(filepath.Base(artifactPath))
+		if !strings.Contains(base, "engine_build") && !strings.Contains(base, "engine_test") {
+			continue
+		}
+		data, err := os.ReadFile(artifactPath)
+		if err != nil {
+			continue
+		}
+		var artifact EngineCheckArtifact
+		if err := json.Unmarshal(data, &artifact); err != nil {
+			continue
+		}
+		kind := strings.TrimSpace(strings.ToLower(artifact.Kind))
+		if kind == "" {
+			switch {
+			case strings.Contains(base, "engine_build"):
+				kind = "build"
+			case strings.Contains(base, "engine_test"):
+				kind = "test"
+			}
+		}
+		if kind != "" {
+			out[kind] = artifact
+		}
+	}
+	return out
+}
+
+func engineVerificationSatisfied(step *domain.Step) (bool, []string) {
+	if step == nil {
+		return false, []string{"implement step"}
+	}
+	artifacts := loadEngineCheckArtifacts(step)
+	// Legacy jobs (created before engine verification was introduced) have no
+	// engine_build/engine_test artifacts at all. Skip verification rather than
+	// blocking them forever with "build evidence"/"test evidence" missing.
+	if len(artifacts) == 0 {
+		hasEngineArtifact := false
+		for _, artifactPath := range step.Artifacts {
+			base := strings.ToLower(filepath.Base(artifactPath))
+			if strings.Contains(base, "engine_build") || strings.Contains(base, "engine_test") {
+				hasEngineArtifact = true
+				break
+			}
+		}
+		if !hasEngineArtifact {
+			// No engine artifacts present at all -- legacy job, skip verification.
+			return true, nil
+		}
+	}
+	var missing []string
+	for _, kind := range []string{"build", "test"} {
+		artifact, ok := artifacts[kind]
+		if !ok {
+			missing = append(missing, kind+" evidence")
+			continue
+		}
+		switch strings.TrimSpace(strings.ToLower(artifact.Status)) {
+		case engineCheckPassed, engineCheckSkipped:
+		default:
+			if artifact.Reason != "" {
+				missing = append(missing, fmt.Sprintf("%s failed: %s", kind, artifact.Reason))
+			} else {
+				missing = append(missing, kind+" failed")
+			}
+		}
+	}
+	return len(missing) == 0, uniqueStrings(missing)
+}
+
 func verificationSatisfied(job domain.Job, contract VerificationContract) (bool, []string) {
 	missing := append([]string(nil), missingRequiredSteps(&job, contract.RequiredStepTypes)...)
-	step := latestTestStep(&job)
-	if step == nil {
-		missing = append(missing, "test step")
-		return false, uniqueStrings(missing)
-	}
-	if len(step.Artifacts) == 0 {
-		missing = append(missing, "test artifacts")
-	}
-	if strings.TrimSpace(step.Summary) == "" {
-		missing = append(missing, "tester summary")
+	if ok, engineMissing := engineVerificationSatisfied(latestImplementStep(&job)); !ok {
+		missing = append(missing, engineMissing...)
 	}
 	return len(missing) == 0, uniqueStrings(missing)
 }

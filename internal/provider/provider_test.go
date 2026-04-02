@@ -211,7 +211,6 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 		domain.ProviderName("evaluator-provider"),
 		domain.ProviderName("executor-provider"),
 		domain.ProviderName("reviewer-provider"),
-		domain.ProviderName("tester-provider"),
 	} {
 		registry.Register(roleTrackingAdapter{name: name})
 	}
@@ -305,20 +304,20 @@ func TestSessionManagerUsesRoleOverrideProvidersAcrossRoles(t *testing.T) {
 			want: "reviewer-provider:worker:review",
 		},
 		{
-			name: "worker tester",
+			name: "worker test routes to executor",
 			job: domain.Job{
 				Provider: domain.ProviderName("global-provider"),
 				RoleProfiles: domain.RoleProfiles{
-					Tester: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "tester-profile-model"},
+					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
 				RoleOverrides: map[string]domain.RoleProfile{
-					"tester": {Provider: domain.ProviderName("tester-provider"), Model: "tester-override-model"},
+					"executor": {Provider: domain.ProviderName("executor-provider"), Model: "executor-override-model"},
 				},
 			},
 			run: func(job domain.Job) (string, error) {
 				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "test"})
 			},
-			want: "tester-provider:worker:test",
+			want: "executor-provider:worker:test",
 		},
 	}
 
@@ -347,7 +346,6 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 		domain.ProviderName("role-profile-provider"),
 		domain.ProviderName("leader-override-provider"),
 		domain.ProviderName("executor-override-provider"),
-		domain.ProviderName("tester-override-provider"),
 	} {
 		registry.Register(profileEchoAdapter{name: name})
 	}
@@ -440,20 +438,20 @@ func TestSessionManagerRoleOverridesFallBackCleanly(t *testing.T) {
 			want: "role-profile-provider:reviewer:reviewer-override-model",
 		},
 		{
-			name: "tester override provider keeps role profile model",
+			name: "test tasks use executor override provider",
 			job: domain.Job{
 				Provider: domain.ProviderName("global-provider"),
 				RoleProfiles: domain.RoleProfiles{
-					Tester: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "tester-profile-model"},
+					Executor: domain.ExecutionProfile{Provider: domain.ProviderName("role-profile-provider"), Model: "executor-profile-model"},
 				},
 				RoleOverrides: map[string]domain.RoleProfile{
-					"tester": {Provider: domain.ProviderName("tester-override-provider")},
+					"executor": {Provider: domain.ProviderName("executor-override-provider")},
 				},
 			},
 			run: func(job domain.Job) (string, error) {
 				return manager.RunWorker(context.Background(), job, domain.LeaderOutput{TaskType: "test"})
 			},
-			want: "tester-override-provider:tester:tester-profile-model",
+			want: "executor-override-provider:executor:executor-profile-model",
 		},
 	}
 
@@ -553,11 +551,11 @@ func TestSessionManagerFallsBackToJobProviderWhenRoleProviderEmpty(t *testing.T)
 			want: "global-provider:worker:review",
 		},
 		{
-			name: "worker tester",
+			name: "worker test routes to executor",
 			job: domain.Job{
 				Provider: domain.ProviderName("global-provider"),
 				RoleProfiles: domain.RoleProfiles{
-					Tester: domain.ExecutionProfile{Model: "tester-model"},
+					Executor: domain.ExecutionProfile{Model: "executor-model"},
 				},
 			},
 			run: func(job domain.Job) (string, error) {
@@ -595,8 +593,8 @@ func TestCodexAdapterRunPlannerUsesPlannerProfile(t *testing.T) {
 		// runCommand now matches runExecutableWithStdin: prompt is stdinData (6th arg)
 		runCommand: func(_ context.Context, _ string, _ time.Duration, _ string, _ []string, stdinData string, args ...string) (CommandResult, error) {
 			// prompt is now fed via stdin, not as a positional arg
-			if !strings.Contains(stdinData, "planning component") && !strings.Contains(stdinData, "planner") {
-				t.Fatalf("expected planner prompt in stdin, got: %s", stdinData)
+			if !strings.Contains(stdinData, "director planning component") && !strings.Contains(stdinData, "director") {
+				t.Fatalf("expected director planning prompt in stdin, got: %s", stdinData)
 			}
 			if !strings.Contains(stdinData, "planner-model") {
 				t.Fatalf("expected planner profile to appear in stdin prompt, got: %s", stdinData)
@@ -874,7 +872,7 @@ func TestClaudeAdapterBuildsCLIArgsAndModelFlagForRoleProfiles(t *testing.T) {
 				return adapter.RunLeader(context.Background(), job)
 			},
 			wantModel:  "sonnet",
-			wantPrompt: "leader component",
+			wantPrompt: "director dispatch component",
 		},
 		{
 			name: "planner",
@@ -891,7 +889,7 @@ func TestClaudeAdapterBuildsCLIArgsAndModelFlagForRoleProfiles(t *testing.T) {
 				return adapter.RunPlanner(context.Background(), job)
 			},
 			wantModel:  "haiku",
-			wantPrompt: "planner component",
+			wantPrompt: "director planning component",
 		},
 		{
 			name: "evaluator",
@@ -1373,7 +1371,7 @@ func TestReviewerPromptUsesAdversarialGuidance(t *testing.T) {
 	}
 }
 
-func TestReviewerAndTesterPromptsKeepRoleSpecificBehaviorWithAmbition(t *testing.T) {
+func TestReviewerAndExecutorPromptsKeepRoleSpecificBehaviorWithAmbition(t *testing.T) {
 	t.Parallel()
 
 	job := domain.Job{
@@ -1395,17 +1393,17 @@ func TestReviewerAndTesterPromptsKeepRoleSpecificBehaviorWithAmbition(t *testing
 		t.Fatal("reviewer prompt should not include executor ambition guidance")
 	}
 
-	testerPrompt := buildWorkerPrompt(job, domain.LeaderOutput{
+	executorPrompt := buildWorkerPrompt(job, domain.LeaderOutput{
 		Action:   "run_worker",
 		Target:   "D",
 		TaskType: "test",
 		TaskText: "Run the verification checks",
 	})
-	if !strings.Contains(testerPrompt, "You are a tester component") {
-		t.Fatal("expected tester branch to remain active")
+	if !strings.Contains(executorPrompt, "You are an executor worker") {
+		t.Fatal("expected test tasks to use executor prompt guidance")
 	}
-	if strings.Contains(testerPrompt, "Autonomy guidance:") {
-		t.Fatal("tester prompt should not include executor ambition guidance")
+	if !strings.Contains(executorPrompt, "Autonomy guidance:") {
+		t.Fatal("executor prompt should include executor ambition guidance")
 	}
 }
 
@@ -1451,7 +1449,7 @@ func TestWorkerPromptRendersContextSectionsAcrossRoles(t *testing.T) {
 	}{
 		{name: "executor", taskType: "implement", roleText: "You are an executor worker"},
 		{name: "reviewer", taskType: "review", roleText: "You are a reviewer component"},
-		{name: "tester", taskType: "test", roleText: "You are a tester component"},
+		{name: "test routes to executor", taskType: "test", roleText: "You are an executor worker"},
 	}
 
 	for _, tc := range cases {

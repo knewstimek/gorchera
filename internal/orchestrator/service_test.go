@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -63,8 +64,10 @@ func TestServiceStartCompletesMockLoop(t *testing.T) {
 		if step.Status != domain.StepStatusSucceeded {
 			t.Fatalf("expected succeeded step, got %s", step.Status)
 		}
-		if strings.EqualFold(step.TaskType, "test") && !strings.Contains(strings.ToLower(step.TaskText), "verification contract ref:") {
-			t.Fatalf("expected test step to include verification contract, got %q", step.TaskText)
+		if strings.EqualFold(step.TaskType, "implement") {
+			if !artifactListContains(step.Artifacts, "engine_build.json") || !artifactListContains(step.Artifacts, "engine_test.json") {
+				t.Fatalf("expected implement step to include engine verification artifacts, got %v", step.Artifacts)
+			}
 		}
 		for _, artifact := range step.Artifacts {
 			if _, err := os.Stat(artifact); err != nil {
@@ -455,6 +458,24 @@ func waitForJobStatus(t *testing.T, service *orchestrator.Service, jobID string,
 	}
 }
 
+func artifactListContains(paths []string, suffix string) bool {
+	for _, path := range paths {
+		if strings.HasSuffix(strings.ToLower(filepath.Base(path)), strings.ToLower(suffix)) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestImplementStepForTest(job domain.Job) *domain.Step {
+	for i := len(job.Steps) - 1; i >= 0; i-- {
+		if strings.EqualFold(job.Steps[i].TaskType, "implement") {
+			return &job.Steps[i]
+		}
+	}
+	return nil
+}
+
 func waitForChainStatus(t *testing.T, service *orchestrator.Service, chainID string, want string) *domain.JobChain {
 	t.Helper()
 
@@ -495,8 +516,8 @@ func TestServiceStartChainStartsFirstGoalAndAdvancesSequentially(t *testing.T) {
 	)
 
 	chain, err := service.StartChain(context.Background(), []domain.ChainGoal{
-		{Goal: "hold first", Provider: control.name, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
-		{Goal: "finish second", Provider: control.name, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+		{Goal: "hold first", Provider: control.name, PipelineMode: string(domain.PipelineModeLight), StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+		{Goal: "finish second", Provider: control.name, PipelineMode: string(domain.PipelineModeLight), StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
 	}, workspace)
 	if err != nil {
 		t.Fatalf("StartChain returned error: %v", err)
@@ -567,8 +588,8 @@ func TestServiceStartChainPropagatesAmbitionLevelToJobs(t *testing.T) {
 	t.Cleanup(service.Shutdown)
 
 	chain, err := service.StartChain(context.Background(), []domain.ChainGoal{
-		{Goal: "finish first", Provider: control.name, AmbitionLevel: domain.AmbitionLevelHigh, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
-		{Goal: "hold second", Provider: control.name, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+		{Goal: "finish first", Provider: control.name, PipelineMode: string(domain.PipelineModeLight), AmbitionLevel: domain.AmbitionLevelHigh, StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
+		{Goal: "hold second", Provider: control.name, PipelineMode: string(domain.PipelineModeLight), StrictnessLevel: "lenient", ContextMode: "full", MaxSteps: 4},
 	}, workspace)
 	if err != nil {
 		t.Fatalf("StartChain returned error: %v", err)
@@ -1272,8 +1293,6 @@ func (p roleRoutingLeaderProvider) RunLeader(_ context.Context, job domain.Job) 
 		return `{"action":"run_worker","target":"B","task_type":"implement","task_text":"implement the first step"}`, nil
 	case 1:
 		return `{"action":"run_worker","target":"C","task_type":"review","task_text":"review the first step"}`, nil
-	case 2:
-		return `{"action":"run_worker","target":"D","task_type":"test","task_text":"test the first step"}`, nil
 	default:
 		return `{"action":"complete","target":"none","task_type":"none","reason":"all roles exercised"}`, nil
 	}
@@ -1304,7 +1323,7 @@ type phaseTrace struct {
 	plannerCount          int
 	leaderCount           int
 	evaluatorCount        int
-	testContractCount     int
+	engineEvidenceCount   int
 	evaluatorContextCount int
 	workerCallCount       map[string]int
 }
@@ -1331,8 +1350,8 @@ func (t *phaseTrace) recordContract(kind string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch kind {
-	case "tester":
-		t.testContractCount++
+	case "engine":
+		t.engineEvidenceCount++
 	case "evaluator":
 		t.evaluatorContextCount++
 	}
@@ -1356,10 +1375,10 @@ func (t *phaseTrace) evaluatorCalls() int {
 	return t.evaluatorCount
 }
 
-func (t *phaseTrace) testContractCalls() int {
+func (t *phaseTrace) engineEvidenceCalls() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.testContractCount
+	return t.engineEvidenceCount
 }
 
 func (t *phaseTrace) evaluatorContractCalls() int {
@@ -1393,8 +1412,6 @@ func (p phaseProvider) RunLeader(_ context.Context, job domain.Job) (string, err
 			return `{"action":"run_worker","target":"B","task_type":"implement","task_text":"implement the first step"}`, nil
 		case 1:
 			return `{"action":"run_worker","target":"C","task_type":"review","task_text":"review the first step"}`, nil
-		case 2:
-			return `{"action":"run_worker","target":"D","task_type":"test","task_text":"test the first step"}`, nil
 		default:
 			return `{"action":"complete","target":"none","task_type":"none","reason":"all roles exercised"}`, nil
 		}
@@ -1405,7 +1422,7 @@ func (p phaseProvider) RunLeader(_ context.Context, job domain.Job) (string, err
 
 func (p phaseProvider) RunPlanner(_ context.Context, job domain.Job) (string, error) {
 	p.trace.recordPhase("planner", string(p.name))
-	return `{"goal":"` + job.Goal + `","summary":"planner provider called","product_scope":["provider-backed planning"],"proposed_steps":["implement the first step","review the first step","test the first step"],"acceptance":["planner artifact exists"]}`, nil
+	return `{"goal":"` + job.Goal + `","summary":"planner provider called","product_scope":["provider-backed planning"],"proposed_steps":["implement the first step","review the first step"],"acceptance":["planner artifact exists"]}`, nil
 }
 
 func (p phaseProvider) RunEvaluator(_ context.Context, job domain.Job) (string, error) {
@@ -1418,8 +1435,10 @@ func (p phaseProvider) RunEvaluator(_ context.Context, job domain.Job) (string, 
 }
 
 func (p phaseProvider) RunWorker(_ context.Context, job domain.Job, task domain.LeaderOutput) (string, error) {
-	if task.TaskType == "test" && strings.Contains(strings.ToLower(task.TaskText), "verification contract ref:") {
-		p.trace.recordContract("tester")
+	if task.TaskType == "review" {
+		if step := latestImplementStepForTest(job); step != nil && artifactListContains(step.Artifacts, "engine_build.json") && artifactListContains(step.Artifacts, "engine_test.json") {
+			p.trace.recordContract("engine")
+		}
 	}
 	p.trace.recordPhase("worker", string(p.name))
 	return `{"status":"success","summary":"` + string(p.name) + ` handled ` + task.TaskType + `","artifacts":["worker-output.json"]}`, nil
@@ -1449,19 +1468,21 @@ func quotedList(values []string) string {
 }
 
 type parallelFanoutProvider struct {
-	name  domain.ProviderName
-	mode  string
-	mu    sync.Mutex
-	start int
-	calls []string
-	wait  chan struct{}
+	name     domain.ProviderName
+	mode     string
+	mu       sync.Mutex
+	start    int
+	calls    []string
+	wait     chan struct{}
+	failures map[string]int
 }
 
 func newParallelFanoutProvider(name domain.ProviderName, mode string) *parallelFanoutProvider {
 	return &parallelFanoutProvider{
-		name: name,
-		mode: mode,
-		wait: make(chan struct{}),
+		name:     name,
+		mode:     mode,
+		wait:     make(chan struct{}),
+		failures: make(map[string]int),
 	}
 }
 
@@ -1489,7 +1510,9 @@ func (p *parallelFanoutProvider) RunLeader(_ context.Context, job domain.Job) (s
 				parallelSpecArtifact("C", "review", "review the core implementation", "internal/orchestrator/parallel/review"),
 			), nil
 		case 2:
-			return leaderOutput("run_worker", "D", "test", "validate the parallel implementation"), nil
+			if p.mode == "worker-failed" {
+				return leaderOutput("run_worker", "D", "review", "re-run the failed parallel review"), nil
+			}
 		default:
 			return leaderOutput("complete", "none", "none", "parallel fan-out finished"), nil
 		}
@@ -1517,7 +1540,13 @@ func (p *parallelFanoutProvider) RunWorker(ctx context.Context, _ domain.Job, ta
 	}
 
 	if p.mode == "worker-failed" && task.TaskType == "review" {
-		return `{"status":"failed","summary":"review worker failed","error_reason":"review worker failed"}`, nil
+		p.mu.Lock()
+		p.failures[task.TaskType]++
+		attempt := p.failures[task.TaskType]
+		p.mu.Unlock()
+		if attempt == 1 {
+			return `{"status":"failed","summary":"review worker failed","error_reason":"review worker failed"}`, nil
+		}
 	}
 
 	return fmt.Sprintf(`{"status":"success","summary":"%s handled %s","artifacts":["%s-%s.json"]}`, p.name, task.TaskType, strings.ReplaceAll(string(p.name), " ", "-"), task.Target), nil
@@ -1564,11 +1593,11 @@ func TestServiceFansOutParallelWorkers(t *testing.T) {
 	if job.Status != domain.JobStatusDone {
 		t.Fatalf("expected done status, got %s", job.Status)
 	}
-	if fanout.workerCalls() != 3 {
-		t.Fatalf("expected 3 worker calls, got %d", fanout.workerCalls())
+	if fanout.workerCalls() != 2 {
+		t.Fatalf("expected 2 worker calls, got %d", fanout.workerCalls())
 	}
-	if len(job.Steps) != 3 {
-		t.Fatalf("expected 3 steps, got %d", len(job.Steps))
+	if len(job.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(job.Steps))
 	}
 
 	if job.Steps[0].Target != "B" || job.Steps[0].TaskType != "implement" || job.Steps[0].Status != domain.StepStatusSucceeded {
@@ -1577,11 +1606,8 @@ func TestServiceFansOutParallelWorkers(t *testing.T) {
 	if job.Steps[1].Target != "C" || job.Steps[1].TaskType != "review" || job.Steps[1].Status != domain.StepStatusSucceeded {
 		t.Fatalf("unexpected parallel step: %#v", job.Steps[1])
 	}
-	if job.Steps[2].Target != "D" || job.Steps[2].TaskType != "test" || job.Steps[2].Status != domain.StepStatusSucceeded {
-		t.Fatalf("unexpected test step: %#v", job.Steps[2])
-	}
-	if !strings.Contains(strings.ToLower(job.Steps[2].TaskText), "verification contract ref:") {
-		t.Fatalf("expected test step to include verification contract prompt, got %q", job.Steps[2].TaskText)
+	if !artifactListContains(job.Steps[0].Artifacts, "engine_build.json") || !artifactListContains(job.Steps[0].Artifacts, "engine_test.json") {
+		t.Fatalf("expected implement step to include engine artifacts, got %v", job.Steps[0].Artifacts)
 	}
 }
 
@@ -1618,7 +1644,7 @@ func TestServiceParallelWorkerFailureReturnsControlToLeader(t *testing.T) {
 		t.Fatalf("expected done status after leader recovery, got %s", job.Status)
 	}
 	if fanout.workerCalls() != 3 {
-		t.Fatalf("expected leader to keep control and schedule a third worker, got %d calls", fanout.workerCalls())
+		t.Fatalf("expected leader to keep control after the failed review worker, got %d calls", fanout.workerCalls())
 	}
 	if len(job.Steps) != 3 {
 		t.Fatalf("expected 3 steps, got %d", len(job.Steps))
@@ -1629,8 +1655,8 @@ func TestServiceParallelWorkerFailureReturnsControlToLeader(t *testing.T) {
 	if job.Steps[1].Status != domain.StepStatusFailed {
 		t.Fatalf("expected failed parallel review step, got %#v", job.Steps[1])
 	}
-	if job.Steps[2].Status != domain.StepStatusSucceeded || job.Steps[2].TaskType != "test" {
-		t.Fatalf("expected leader-scheduled recovery test step, got %#v", job.Steps[2])
+	if job.Steps[2].Status != domain.StepStatusSucceeded || job.Steps[2].TaskType != "review" {
+		t.Fatalf("expected recovery review step, got %#v", job.Steps[2])
 	}
 }
 
@@ -1931,7 +1957,6 @@ func TestServiceRoutesWorkerRolesByTaskType(t *testing.T) {
 	registry.Register(roleRoutingLeaderProvider{name: domain.ProviderName("role-routing-leader")})
 	registry.Register(roleRoutingWorkerProvider{name: domain.ProviderName("role-routing-executor")})
 	registry.Register(roleRoutingWorkerProvider{name: domain.ProviderName("role-routing-reviewer")})
-	registry.Register(roleRoutingWorkerProvider{name: domain.ProviderName("role-routing-tester")})
 
 	service := orchestrator.NewService(
 		provider.NewSessionManager(registry),
@@ -1947,7 +1972,6 @@ func TestServiceRoutesWorkerRolesByTaskType(t *testing.T) {
 			Leader:    domain.ExecutionProfile{Provider: domain.ProviderName("role-routing-leader")},
 			Executor:  domain.ExecutionProfile{Provider: domain.ProviderName("role-routing-executor")},
 			Reviewer:  domain.ExecutionProfile{Provider: domain.ProviderName("role-routing-reviewer")},
-			Tester:    domain.ExecutionProfile{Provider: domain.ProviderName("role-routing-tester")},
 			Evaluator: domain.ExecutionProfile{Provider: domain.ProviderName("role-routing-leader")},
 		},
 		MaxSteps: 8,
@@ -1958,24 +1982,23 @@ func TestServiceRoutesWorkerRolesByTaskType(t *testing.T) {
 	if job.Status != domain.JobStatusDone {
 		t.Fatalf("expected done status, got %s", job.Status)
 	}
-	if len(job.Steps) != 3 {
-		t.Fatalf("expected 3 steps, got %d", len(job.Steps))
+	if len(job.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(job.Steps))
 	}
 
 	got := []string{
 		job.Steps[0].Summary,
 		job.Steps[1].Summary,
-		job.Steps[2].Summary,
 	}
 	want := []string{
 		"role-routing-executor handled implement",
 		"role-routing-reviewer handled review",
-		"role-routing-tester handled test",
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("step %d summary mismatch: got %q want %q", i+1, got[i], want[i])
-		}
+	if !strings.HasPrefix(got[0], want[0]) {
+		t.Fatalf("step 1 summary mismatch: got %q want prefix %q", got[0], want[0])
+	}
+	if got[1] != want[1] {
+		t.Fatalf("step 2 summary mismatch: got %q want %q", got[1], want[1])
 	}
 }
 
@@ -2004,7 +2027,6 @@ func TestServiceRoutesPlannerAndEvaluatorThroughProviders(t *testing.T) {
 			Leader:    domain.ExecutionProfile{Provider: domain.ProviderName("leader-phase")},
 			Executor:  domain.ExecutionProfile{Provider: domain.ProviderName("executor-phase")},
 			Reviewer:  domain.ExecutionProfile{Provider: domain.ProviderName("reviewer-phase")},
-			Tester:    domain.ExecutionProfile{Provider: domain.ProviderName("executor-phase")},
 			Evaluator: domain.ExecutionProfile{Provider: domain.ProviderName("evaluator-phase")},
 		},
 		MaxSteps: 8,
@@ -2030,8 +2052,8 @@ func TestServiceRoutesPlannerAndEvaluatorThroughProviders(t *testing.T) {
 	if trace.workerCalls("executor-phase") == 0 || trace.workerCalls("reviewer-phase") == 0 {
 		t.Fatal("expected executor and reviewer worker phases to call providers")
 	}
-	if trace.testContractCalls() == 0 {
-		t.Fatal("expected tester phase to receive verification contract context")
+	if trace.engineEvidenceCalls() == 0 {
+		t.Fatal("expected review phase to observe engine verification evidence")
 	}
 }
 
@@ -2149,6 +2171,7 @@ func TestServiceClearsSupervisorDirectiveAfterLeaderTurn(t *testing.T) {
 		Status:              domain.JobStatusWaitingLeader,
 		Provider:            adapter.name,
 		RoleProfiles:        domain.DefaultRoleProfiles(adapter.name),
+		PipelineMode:        string(domain.PipelineModeLight),
 		PlanningArtifacts:   []string{"plan.json"},
 		SprintContractRef:   sprintContract,
 		SupervisorDirective: "[SUPERVISOR] focus on the next leader turn",
@@ -2156,11 +2179,16 @@ func TestServiceClearsSupervisorDirectiveAfterLeaderTurn(t *testing.T) {
 		CurrentStep:         1,
 		Steps: []domain.Step{
 			{
-				Index:      1,
-				Target:     "B",
-				TaskType:   "implement",
-				TaskText:   "existing implementation",
-				Status:     domain.StepStatusSucceeded,
+				Index:    1,
+				Target:   "B",
+				TaskType: "implement",
+				TaskText: "existing implementation",
+				Status:   domain.StepStatusSucceeded,
+				Artifacts: writeEngineArtifactsForServiceTest(
+					t,
+					orchestrator.EngineCheckArtifact{Kind: "build", Status: "skipped", Command: "go build ./...", Reason: "test fixture"},
+					orchestrator.EngineCheckArtifact{Kind: "test", Status: "skipped", Command: "go test ./...", Reason: "test fixture"},
+				),
 				Summary:    "already completed",
 				StartedAt:  time.Now().UTC(),
 				FinishedAt: time.Now().UTC(),
@@ -2302,13 +2330,15 @@ func (p *chainOutcomeProvider) Name() domain.ProviderName {
 
 func (p *chainOutcomeProvider) RunLeader(_ context.Context, job domain.Job) (string, error) {
 	switch {
-	case strings.Contains(job.Goal, "hold"):
-		<-p.release
-		return `{"action":"complete","target":"none","task_type":"none","reason":"released"}`, nil
 	case strings.Contains(job.Goal, "block"):
 		return `{"action":"blocked","target":"none","task_type":"none","reason":"chain blocked"}`, nil
 	case strings.Contains(job.Goal, "fail"):
 		return `{"action":"fail","target":"none","task_type":"none","reason":"chain failed"}`, nil
+	case len(job.Steps) == 0:
+		return `{"action":"run_worker","target":"B","task_type":"implement","task_text":"chain implementation"}`, nil
+	case strings.Contains(job.Goal, "hold"):
+		<-p.release
+		return `{"action":"complete","target":"none","task_type":"none","reason":"released"}`, nil
 	default:
 		return `{"action":"complete","target":"none","task_type":"none","reason":"chain complete"}`, nil
 	}
@@ -2462,6 +2492,127 @@ func TestServiceResumeSuppressesDuplicateRunLoop(t *testing.T) {
 	}
 	if result.job.Status != domain.JobStatusBlocked {
 		t.Fatalf("expected blocked status after releasing gated leader, got %s", result.job.Status)
+	}
+}
+
+func TestServiceResumeWithExtraStepsExtendsBlockedJob(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	adapter := &directiveTrackingProvider{name: domain.ProviderName("resume-extra-steps")}
+	registry.Register(adapter)
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		stateStore,
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	sprintContract := filepath.Join(root, "resume-extra-steps-sprint.json")
+	if err := os.WriteFile(sprintContract, []byte(`{"version":1,"goal":"resume extra steps","threshold_success_count":1,"threshold_min_steps":1,"threshold_require_eval":true}`), 0o644); err != nil {
+		t.Fatalf("failed to write sprint contract: %v", err)
+	}
+
+	job := &domain.Job{
+		ID:                   "job-resume-extra-steps",
+		Goal:                 "Resume a blocked max-steps job",
+		WorkspaceDir:         root,
+		Status:               domain.JobStatusBlocked,
+		BlockedReason:        "max_steps_exceeded",
+		Provider:             adapter.name,
+		RoleProfiles:         domain.DefaultRoleProfiles(adapter.name),
+		PipelineMode:         string(domain.PipelineModeLight),
+		PlanningArtifacts:    []string{"plan.json"},
+		SprintContractRef:    sprintContract,
+		MaxSteps:             1,
+		CurrentStep:          1,
+		ResumeExtraStepsUsed: 0,
+		Steps: []domain.Step{
+			{
+				Index:    1,
+				Target:   "B",
+				TaskType: "implement",
+				Status:   domain.StepStatusSucceeded,
+				Artifacts: writeEngineArtifactsForServiceTest(
+					t,
+					orchestrator.EngineCheckArtifact{Kind: "build", Status: "skipped", Command: "go build ./...", Reason: "test fixture"},
+					orchestrator.EngineCheckArtifact{Kind: "test", Status: "skipped", Command: "go test ./...", Reason: "test fixture"},
+				),
+				StartedAt:  time.Now().UTC(),
+				FinishedAt: time.Now().UTC(),
+			},
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := stateStore.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("failed to save job: %v", err)
+	}
+
+	updated, err := service.ResumeWithOptions(context.Background(), job.ID, orchestrator.ResumeOptions{ExtraSteps: 2})
+	if err != nil {
+		t.Fatalf("ResumeWithOptions returned error: %v", err)
+	}
+	if updated.Status != domain.JobStatusDone {
+		t.Fatalf("expected done status, got %s", updated.Status)
+	}
+	if updated.MaxSteps != 3 {
+		t.Fatalf("expected max steps to increase to 3, got %d", updated.MaxSteps)
+	}
+	if updated.ResumeExtraStepsUsed != 2 {
+		t.Fatalf("expected resume extra steps used to be 2, got %d", updated.ResumeExtraStepsUsed)
+	}
+	if updated.BlockedReason != "" {
+		t.Fatalf("expected blocked reason to clear, got %q", updated.BlockedReason)
+	}
+}
+
+func TestServiceResumeWithExtraStepsRejectsInvalidRequests(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	registry := provider.NewRegistry()
+	adapter := &directiveTrackingProvider{name: domain.ProviderName("resume-extra-steps-invalid")}
+	registry.Register(adapter)
+	stateStore := store.NewStateStore(filepath.Join(root, "state"))
+
+	service := orchestrator.NewService(
+		provider.NewSessionManager(registry),
+		stateStore,
+		store.NewArtifactStore(filepath.Join(root, "artifacts")),
+		root,
+	)
+
+	sprintContract := filepath.Join(root, "invalid-sprint.json")
+	if err := os.WriteFile(sprintContract, []byte(`{"version":1,"goal":"resume invalid","threshold_success_count":0,"threshold_min_steps":0,"threshold_require_eval":false}`), 0o644); err != nil {
+		t.Fatalf("failed to write sprint contract: %v", err)
+	}
+
+	job := &domain.Job{
+		ID:                   "job-resume-extra-steps-invalid",
+		Goal:                 "Reject invalid resume extensions",
+		WorkspaceDir:         root,
+		Status:               domain.JobStatusBlocked,
+		BlockedReason:        "max_steps_exceeded",
+		Provider:             adapter.name,
+		RoleProfiles:         domain.DefaultRoleProfiles(adapter.name),
+		PlanningArtifacts:    []string{"plan.json"},
+		SprintContractRef:    sprintContract,
+		MaxSteps:             1,
+		CurrentStep:          1,
+		ResumeExtraStepsUsed: 20,
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
+	}
+	if err := stateStore.SaveJob(context.Background(), job); err != nil {
+		t.Fatalf("failed to save job: %v", err)
+	}
+
+	if _, err := service.ResumeWithOptions(context.Background(), job.ID, orchestrator.ResumeOptions{ExtraSteps: 1}); err == nil || !strings.Contains(err.Error(), "budget exhausted") {
+		t.Fatalf("expected budget exhaustion error, got %v", err)
 	}
 }
 
@@ -2676,6 +2827,38 @@ func saveRecoverableLeaderJob(t *testing.T, stateStore *store.StateStore, root s
 		t.Fatalf("failed to save recoverable job %s: %v", jobID, err)
 	}
 	return job
+}
+
+func writeEngineArtifactsForServiceTest(t *testing.T, build, test orchestrator.EngineCheckArtifact) []string {
+	t.Helper()
+
+	dir := t.TempDir()
+	artifacts := []struct {
+		name   string
+		record orchestrator.EngineCheckArtifact
+	}{
+		{
+			name:   "step-01-engine_build.json",
+			record: build,
+		},
+		{
+			name:   "step-01-engine_test.json",
+			record: test,
+		},
+	}
+	paths := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		path := filepath.Join(dir, artifact.name)
+		data, err := json.Marshal(artifact.record)
+		if err != nil {
+			t.Fatalf("failed to marshal engine artifact: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("failed to write engine artifact: %v", err)
+		}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func waitForLeaderStart(t *testing.T, started <-chan struct{}, message string) {

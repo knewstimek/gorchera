@@ -5,8 +5,8 @@ Last verified: 2026-04-03
 ## Build And Test
 
 ```bash
-go build ./...   # PASS
-go test ./...    # PASS
+go build ./...   # FAIL in this worktree: internal/orchestrator/service.go imports os but does not use it
+go test ./...    # FAIL for the same compile error
 ```
 
 ## Implemented
@@ -15,6 +15,7 @@ go test ./...    # PASS
 
 - Bounded orchestrator loop with persisted job state, step state, ordered events, and atomic JSON storage.
 - Provider-backed planner and evaluator phases, plus persisted planning artifacts and verification contracts.
+- Target pipeline redesign is in flight: control-plane surfaces now expose `pipeline_mode`, bounded resume `extra_steps`, and terminal-state notifications needed for the director/executor/[engine build+test]/reviewer/evaluator model.
 - Evaluator-gated completion with strictness levels:
   - `strict`: requires succeeded `implement`, `review`, and `test`
   - `normal`: requires succeeded `implement`; verification can be satisfied by succeeded `test`, `build`, or `command`
@@ -164,12 +165,17 @@ go test ./...    # PASS
 - MCP server is implemented with:
   - job lifecycle tools
   - chain lifecycle tools
+  - `gorchera_start_job.pipeline_mode` (`light` | `balanced` | `full`, default `balanced`)
   - `gorchera_start_job.ambition_level`
-  - `gorchera_start_chain` per-goal `ambition_level`
   - `gorchera_start_job.role_overrides`
+  - `gorchera_start_chain` per-goal `ambition_level`
   - `gorchera_start_chain` per-goal `role_overrides`
+  - `gorchera_resume.extra_steps` with MCP-side bounds (`1..20`)
   - `wait=true` polling for job and chain status with configurable `wait_timeout` (default 30s, 0=5min maximum)
   - `gorchera_steer`
+  - JSON-RPC terminal notifications via `notifications/job_terminal` with `{job_id, status, summary}`
+  - buffered notification writes so terminal notifications can be queued before stdio is fully ready
+  - terminal notification forwarding for cancellation paths that surface as `job_cancelled`, including interrupted chain-goal transitions
 
 ## In-Memory Job Cache And JobStatusPlanning (2026-04-02)
 
@@ -242,6 +248,8 @@ All 10 HIGH severity findings from `docs/AUDIT_REPORT.md` have been fixed. `go b
 
 - Execution-profile fields `effort`, `tool_policy`, and `max_budget_usd` are stored in domain types but are not enforced by the orchestrator.
 - `fallback_model` is intentionally narrow: one same-provider retry only, and only for pre-structured provider command failures.
+- `pipeline_mode` is currently exposed at the MCP/control-plane layer; full orchestrator enforcement depends on the corresponding core director/engine changes.
+- MCP `extra_steps` forwarding is wired to use the core resume-extension hook when available; until that hook is present in the orchestrator layer, non-zero `extra_steps` requests are rejected instead of being silently ignored.
 - HTTP `POST /jobs` accepts role profiles and max steps, but it does not expose `strictness_level` or `context_mode`.
 - CLI `run` exposes `strictness` but does not expose `context_mode`.
 - Chain lifecycle is exposed through MCP and service methods, but not through CLI or HTTP routes.

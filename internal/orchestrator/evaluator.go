@@ -145,29 +145,14 @@ func summaryEvidence(job *domain.Job) []string {
 }
 
 func mergeEvaluatorReport(job domain.Job, verification VerificationContract, sprint domain.SprintContract, providerReport domain.EvaluatorReport) *domain.EvaluatorReport {
-	verificationPassed, verificationMissing := verificationSatisfiedForLevel(job, verification, sprint.StrictnessLevel)
+	verificationPassed, verificationMissing := verificationSatisfiedForPipeline(job, verification, sprint)
 	rulePassed := verificationPassed && len(successfulStepTypes(&job)) >= sprint.ThresholdSuccessCnt
 	missing := verificationMissing
-	providerMissing := filterProviderMissingStepTypes(providerReport.MissingStepTypes, sprint.StrictnessLevel)
+	providerMissing := filterProviderMissingStepTypes(providerReport.MissingStepTypes, sprint.RequiredStepTypes)
 	ignoreProviderMissing := providerBlockedOnlyOnOptionalCoverage(providerReport, providerMissing)
 	providerPassed := providerReport.Passed || ignoreProviderMissing
-
-	// normal: if rule-based verification passes, override provider's blocked
-	// status. GPT evaluators sometimes return blocked despite all evidence
-	// passing; the rule gate is authoritative in normal mode.
-	// NOTE: this intentionally overrides even provider Status="failed",
-	// because normal mode trusts the structural check (implement succeeded)
-	// over the provider's subjective judgment.
-	if sprint.StrictnessLevel == "normal" && rulePassed {
+	if rulePassed {
 		providerPassed = true
-	}
-
-	// lenient: if the provider already passed, skip rule gate entirely.
-	// This lets a confident evaluator provider short-circuit step-type checks
-	// when the operator has explicitly opted in to a relaxed policy.
-	if sprint.StrictnessLevel == "lenient" && providerReport.Passed {
-		rulePassed = true
-		missing = nil
 	}
 
 	report := &domain.EvaluatorReport{
@@ -287,7 +272,7 @@ func mergeMissing(ruleMissing []string, providerMissing []string) []string {
 }
 
 func deterministicEvaluatorReport(job domain.Job, verification VerificationContract, sprint domain.SprintContract) domain.EvaluatorReport {
-	_, missing := verificationSatisfiedForLevel(job, verification, sprint.StrictnessLevel)
+	_, missing := verificationSatisfiedForPipeline(job, verification, sprint)
 	report := domain.EvaluatorReport{
 		Status:           "blocked",
 		Passed:           false,
@@ -305,54 +290,30 @@ func deterministicEvaluatorReport(job domain.Job, verification VerificationContr
 	return report
 }
 
-// verificationSatisfiedForLevel applies strictness-aware satisfaction rules.
-//
-// strict: delegates to the canonical verificationSatisfied which requires a
-// test worker step with artifacts and summary.
-//
-// normal: implement is required; review is optional; verification can be
-// satisfied by a succeeded test/build/command step.
-//
-// lenient: only checks required_step_types from the contract (which for
-// lenient jobs is empty), so this always returns (true, nil). The caller in
-// mergeEvaluatorReport additionally short-circuits on provider.Passed.
-func verificationSatisfiedForLevel(job domain.Job, contract VerificationContract, level string) (bool, []string) {
-	switch level {
-	case "strict":
-		return verificationSatisfied(job, contract)
-	case "lenient":
-		// No structural requirements; the provider report is authoritative.
-		missing := missingRequiredSteps(&job, contract.RequiredStepTypes)
-		return len(missing) == 0, missing
-	default: // "normal"
-		return verificationSatisfiedNormal(job, contract)
+func verificationSatisfiedForPipeline(job domain.Job, contract VerificationContract, sprint domain.SprintContract) (bool, []string) {
+	missing := append([]string(nil), missingRequiredSteps(&job, sprint.RequiredStepTypes)...)
+	if ok, engineMissing := engineVerificationSatisfied(latestImplementStep(&job)); !ok {
+		missing = append(missing, engineMissing...)
 	}
-}
-
-// verificationSatisfiedNormal applies normal-level rules:
-//   - implement must succeed
-//   - review is not required
-//   - test/build/command steps are optional (worker may run tests internally)
-func verificationSatisfiedNormal(job domain.Job, contract VerificationContract) (bool, []string) {
-	_ = contract
-
-	missing := missingRequiredSteps(&job, []string{"implement"})
-
 	return len(missing) == 0, uniqueStrings(missing)
 }
 
-func filterProviderMissingStepTypes(missing []string, level string) []string {
-	if level == "lenient" {
-		return nil
-	}
-	if level != "normal" {
-		return uniqueStrings(missing)
-	}
+func verificationSatisfiedNormal(job domain.Job, contract VerificationContract) (bool, []string) {
+	return verificationSatisfiedForPipeline(job, contract, domain.SprintContract{
+		RequiredStepTypes:   []string{"implement"},
+		ThresholdSuccessCnt: 1,
+	})
+}
 
+func filterProviderMissingStepTypes(missing []string, required []string) []string {
+	requiredSet := make(map[string]struct{}, len(required))
+	for _, item := range required {
+		requiredSet[strings.ToLower(strings.TrimSpace(item))] = struct{}{}
+	}
 	filtered := make([]string, 0, len(missing))
 	for _, item := range uniqueStrings(missing) {
-		if strings.EqualFold(item, "implement") {
-			filtered = append(filtered, "implement")
+		if _, ok := requiredSet[strings.ToLower(strings.TrimSpace(item))]; ok {
+			filtered = append(filtered, item)
 		}
 	}
 	return filtered

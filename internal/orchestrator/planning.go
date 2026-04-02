@@ -85,7 +85,7 @@ func (s *Service) runPlannerPhase(ctx context.Context, job *domain.Job) (domain.
 	if err != nil {
 		return domain.PlanningArtifact{}, err
 	}
-	s.accumulateTokenUsage(job, phaseJob.CurrentStep, estimateProviderUsage(phaseJob, domain.RolePlanner, raw, phaseJob))
+	s.accumulateTokenUsage(job, phaseJob.CurrentStep, estimateProviderUsage(phaseJob, domain.RoleDirector, raw, phaseJob))
 	var out domain.PlanningArtifact
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return domain.PlanningArtifact{}, err
@@ -181,48 +181,40 @@ func planningMarkdown(plan domain.PlanningArtifact) string {
 
 func buildSprintContract(job domain.Job, planning domain.PlanningArtifact) domain.SprintContract {
 	level := normalizeStrictnessLevel(job.StrictnessLevel)
-
-	// required step types vary by strictness:
-	// - strict: implement + review + test all required as worker steps
-	// - normal: implement required; review optional; validation can be a
-	//   succeeded test/build/command step
-	// - lenient: no mandatory step type; provider report or system command exit 0 is enough
-	var required []string
-	thresholdSuccessCnt := 0
-	thresholdMinSteps := 0
-	switch level {
-	case "strict":
-		required = []string{"implement", "review", "test"}
-		if hasSystemIntent(job) {
-			required = append(required, "search")
-		}
-		thresholdSuccessCnt = len(required)
-		thresholdMinSteps = len(required)
-	case "normal":
-		required = []string{"implement"}
-		thresholdSuccessCnt = 1
-		thresholdMinSteps = 1
-	case "lenient":
-		required = []string{}
-	case "auto":
-		// "auto" should be resolved in ensurePlanning before reaching here.
-		// If it reaches here (e.g. planner phase skipped), fall back to "normal".
+	if level == "auto" {
 		level = "normal"
-		required = []string{"implement"}
-		thresholdSuccessCnt = 1
+	}
+	required := pipelineRequiredStepTypes(job)
+	thresholdSuccessCnt := len(required)
+	thresholdMinSteps := len(required)
+	if thresholdMinSteps == 0 {
 		thresholdMinSteps = 1
 	}
 
 	return domain.SprintContract{
-		Version:              1,
-		Goal:                 job.Goal,
-		RequiredStepTypes:    required,
-		AcceptanceCriteria:   append([]string(nil), planning.Acceptance...),
-		BlockingCriteria:     []string{"missing required step coverage", "thresholds not satisfied"},
+		Version:            1,
+		Goal:               job.Goal,
+		RequiredStepTypes:  required,
+		AcceptanceCriteria: append([]string(nil), planning.Acceptance...),
+		BlockingCriteria: []string{
+			"missing required director coverage",
+			"engine build/test verification not satisfied",
+			"thresholds not satisfied",
+		},
 		ThresholdSuccessCnt:  thresholdSuccessCnt,
 		ThresholdMinSteps:    thresholdMinSteps,
 		ThresholdRequireEval: true,
 		StrictnessLevel:      level,
+	}
+}
+
+func pipelineRequiredStepTypes(job domain.Job) []string {
+	required := []string{"implement"}
+	switch domain.NormalizePipelineMode(job.PipelineMode) {
+	case string(domain.PipelineModeLight):
+		return required
+	default:
+		return append(required, "review")
 	}
 }
 

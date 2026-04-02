@@ -596,6 +596,7 @@ func runMCP(service *orchestrator.Service, args []string) {
 	defer service.Shutdown()
 
 	mcpServer := mcp.NewServer(service)
+	mcpServer.RegisterTerminalCallback()
 	if err := mcpServer.Run(); err != nil {
 		log.Fatal(err)
 	}
