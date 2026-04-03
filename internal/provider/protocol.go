@@ -43,16 +43,21 @@ func leaderSchema() string {
     "reason": {"type": "string"},
     "next_hint": {"type": "string"},
     "system_action": {
-      "type": "object",
-      "properties": {
-        "type": {"type": "string"},
-        "command": {"type": "string"},
-        "args": {"type": "array", "items": {"type": "string"}},
-        "workdir": {"type": "string"},
-        "description": {"type": "string"}
-      },
-      "required": ["type", "command", "args", "workdir", "description"],
-      "additionalProperties": false
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "properties": {
+            "type": {"type": "string"},
+            "command": {"type": "string"},
+            "args": {"type": "array", "items": {"type": "string"}},
+            "workdir": {"type": "string"},
+            "description": {"type": "string"}
+          },
+          "required": ["type", "command", "args", "workdir", "description"],
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "required": ["action", "target", "task_type", "task_text", "tasks", "artifacts", "reason", "next_hint", "system_action"],
@@ -386,6 +391,7 @@ func buildLeaderPrompt(job domain.Job) string {
 		`Completion rules:`,
 		`- Use action="complete" only when the sprint contract is satisfied and the goal is fully achieved.`,
 		`- Engine-managed go build ./... and go test ./... run automatically after each successful implement step. Do NOT dispatch tester work to reproduce that gate.`,
+		`- [no test files] in engine test artifacts is normal -- it means the package has no _test.go files, NOT a test failure. Do not retry or attempt to fix this.`,
 		`- If required step coverage is missing, dispatch the missing work instead of choosing complete.`,
 		`- Do NOT use summarize as a substitute for complete. Summarize is only for recording intermediate progress between worker dispatches. If all required work is done and verified, choose complete immediately. Do not summarize more than once consecutively.`,
 		`- If the change touches lifecycle, restart, retry, recovery, concurrency, deduplication, external pricing/config, authentication boundaries, or UI/event-delivery boundaries, dispatch an explicit review step that hunts for regressions and counterexamples before choosing complete.`,

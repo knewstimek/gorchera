@@ -67,7 +67,7 @@ var verificationStatuses = map[string]struct{}{
 	"failed":  {},
 }
 
-func ValidateLeaderOutput(msg domain.LeaderOutput) error {
+func ValidateLeaderOutput(msg *domain.LeaderOutput) error {
 	if _, ok := leaderActions[msg.Action]; !ok {
 		return fmt.Errorf("invalid action: %q", msg.Action)
 	}
@@ -119,6 +119,12 @@ func ValidateLeaderOutput(msg domain.LeaderOutput) error {
 		if strings.TrimSpace(msg.SystemAction.Command) == "" {
 			return fmt.Errorf("run_system requires system_action.command")
 		}
+	}
+	// Non-run_system actions: clear stale system_action the model may have sent
+	// even though it was not requested (anyOf null schema allows null, but models
+	// sometimes echo a populated object anyway).
+	if msg.Action != "run_system" && msg.SystemAction != nil {
+		msg.SystemAction = nil
 	}
 	if msg.Action == "complete" || msg.Action == "fail" || msg.Action == "blocked" {
 		if strings.TrimSpace(msg.Reason) == "" {

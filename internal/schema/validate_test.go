@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidateLeaderOutputRunWorkerRequiresFields(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action:   "run_worker",
 		Target:   "none",
 		TaskType: "implement",
@@ -18,7 +18,7 @@ func TestValidateLeaderOutputRunWorkerRequiresFields(t *testing.T) {
 }
 
 func TestValidateLeaderOutputRunWorkersSuccess(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action: "run_workers",
 		Tasks: []domain.WorkerTask{
 			{
@@ -39,7 +39,7 @@ func TestValidateLeaderOutputRunWorkersSuccess(t *testing.T) {
 }
 
 func TestValidateLeaderOutputRunWorkersRequiresDistinctTargets(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action: "run_workers",
 		Tasks: []domain.WorkerTask{
 			{
@@ -60,7 +60,7 @@ func TestValidateLeaderOutputRunWorkersRequiresDistinctTargets(t *testing.T) {
 }
 
 func TestValidateLeaderOutputCompleteRequiresReason(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action:   "complete",
 		Target:   "none",
 		TaskType: "none",
@@ -71,7 +71,7 @@ func TestValidateLeaderOutputCompleteRequiresReason(t *testing.T) {
 }
 
 func TestValidateLeaderOutputRunSystemRequiresSystemAction(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action:   "run_system",
 		Target:   "SYS",
 		TaskType: "build",
@@ -82,7 +82,7 @@ func TestValidateLeaderOutputRunSystemRequiresSystemAction(t *testing.T) {
 }
 
 func TestValidateLeaderOutputRunSystemSuccess(t *testing.T) {
-	err := ValidateLeaderOutput(domain.LeaderOutput{
+	err := ValidateLeaderOutput(&domain.LeaderOutput{
 		Action:   "run_system",
 		Target:   "SYS",
 		TaskType: "build",

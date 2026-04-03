@@ -1574,7 +1574,7 @@ func TestMockLeaderProducesRunWorkersForParallelGoal(t *testing.T) {
 	if len(leader.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(leader.Tasks))
 	}
-	if err := schema.ValidateLeaderOutput(leader); err != nil {
+	if err := schema.ValidateLeaderOutput(&leader); err != nil {
 		t.Fatalf("expected run_workers leader output to validate: %v", err)
 	}
 }

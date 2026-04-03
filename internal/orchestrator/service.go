@@ -1287,7 +1287,7 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (result *domain.
 		for schemaAttempt := 0; ; schemaAttempt++ {
 			parseErr := json.Unmarshal([]byte(rawLeader), &leader)
 			if parseErr == nil {
-				parseErr = schema.ValidateLeaderOutput(leader)
+				parseErr = schema.ValidateLeaderOutput(&leader)
 			}
 			if parseErr == nil {
 				job.SchemaRetryHint = ""
