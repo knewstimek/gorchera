@@ -85,6 +85,45 @@ Before every `gorchera_start_job`:
 6. Goal has Why/Invariants/Constraints?
 7. pipeline_mode appropriate? (light default, balanced for risky)
 
+## Resuming Blocked Jobs
+
+When a job enters the Blocked state it can be resumed from its current position -- not restarted from scratch.
+
+| Situation | Action |
+|-----------|--------|
+| `max_steps_exceeded` | `gorchera_resume(job_id="...", extra_steps=N)` where N is 1-20 |
+| `PendingApproval` | `gorchera_approve` or `gorchera_reject` (resume does NOT apply here) |
+| Other recoverable block | `gorchera_resume(job_id="...")` without extra_steps |
+| Failed job | `gorchera_retry` (different from resume) |
+
+Example: `gorchera_resume(job_id="abc123", extra_steps=5)` gives 5 more steps and continues from the last checkpoint.
+
+## pre_build_commands
+
+Run arbitrary setup commands in the workspace directory before engine verification
+(`go build ./...` / `go test ./...`). Useful when the executor cannot write `go.sum`
+(sandbox read-only) or when the project needs code generation before building.
+
+**Best-effort**: a failing pre_build command is logged but does NOT skip build/test.
+
+```json
+{
+  "goal": "...",
+  "workspace_dir": "/path/to/project",
+  "pre_build_commands": ["go mod tidy", "go generate ./..."]
+}
+```
+
+Common examples:
+- `"go mod tidy"` -- regenerate go.sum after dependency changes
+- `"npm install"` -- install Node dependencies
+- `"make generate"` -- run code generators
+- `"pip install -e ."` -- install Python package in editable mode
+
+Each entry is split on whitespace (no shell expansion). Use one command per entry.
+For shell logic, wrap it: `"sh -c \"go mod tidy && go mod verify\""` is NOT supported --
+use two separate entries instead: `["go mod tidy", "go mod verify"]`.
+
 ## Operational Tips
 
 - **Never cancel a job because status looks stuck.** Planner/executor can take 5-10 minutes. Check process list or worktree diff instead.
@@ -92,3 +131,4 @@ Before every `gorchera_start_job`:
 - **Use gorchera_diff** to inspect worktree changes without manual patching.
 - **Use extra_steps** to resume blocked jobs instead of restarting from scratch.
 - **Simple tasks don't need gorchera.** Use sub-agents directly for one-file, one-function changes.
+- **Use pre_build_commands** when go.sum is stale or code generation is needed before build.

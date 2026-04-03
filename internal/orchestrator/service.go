@@ -48,22 +48,23 @@ type EventNotification struct {
 }
 
 type CreateJobInput struct {
-	Goal            string
-	TechStack       string
-	WorkspaceDir    string
-	WorkspaceMode   string
-	Constraints     []string
-	DoneCriteria    []string
-	Provider        domain.ProviderName
-	RoleProfiles    domain.RoleProfiles
-	RoleOverrides   map[string]domain.RoleOverride
-	MaxSteps        int
-	PipelineMode    string
-	StrictnessLevel string // strict | normal | lenient; empty defaults to "normal"
-	AmbitionLevel   string // low | medium | high; empty or unrecognized defaults to "medium"
-	ContextMode     string // full | summary | minimal; empty defaults to "full"
-	ChainID         string
-	ChainGoalIndex  int
+	Goal             string
+	TechStack        string
+	WorkspaceDir     string
+	WorkspaceMode    string
+	Constraints      []string
+	DoneCriteria     []string
+	Provider         domain.ProviderName
+	RoleProfiles     domain.RoleProfiles
+	RoleOverrides    map[string]domain.RoleOverride
+	MaxSteps         int
+	PipelineMode     string
+	StrictnessLevel  string   // strict | normal | lenient; empty defaults to "normal"
+	AmbitionLevel    string   // low | medium | high; empty or unrecognized defaults to "medium"
+	ContextMode      string   // full | summary | minimal; empty defaults to "full"
+	PreBuildCommands []string // run before engine build/test (best-effort)
+	ChainID          string
+	ChainGoalIndex   int
 }
 
 type ResumeOptions struct {
@@ -434,6 +435,7 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		ContextMode:           normalizeContextMode(input.ContextMode),
 		RoleProfiles:          roleProfiles,
 		RoleOverrides:         canonicalizeRoleOverrides(input.RoleOverrides),
+		PreBuildCommands:      input.PreBuildCommands,
 		ChainID:               strings.TrimSpace(input.ChainID),
 		ChainGoalIndex:        input.ChainGoalIndex,
 		Status:                domain.JobStatusStarting,
@@ -555,18 +557,19 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 	}
 	goal := &chain.Goals[index]
 	job, err := s.prepareJob(CreateJobInput{
-		Goal:            goal.Goal,
-		Provider:        goal.Provider,
-		WorkspaceDir:    workspaceDir,
-		MaxSteps:        goal.MaxSteps,
-		PipelineMode:    goal.PipelineMode,
-		StrictnessLevel: goal.StrictnessLevel,
-		AmbitionLevel:   goal.AmbitionLevel,
-		ContextMode:     goal.ContextMode,
-		RoleProfiles:    domain.DefaultRoleProfiles(goal.Provider),
-		RoleOverrides:   goal.RoleOverrides,
-		ChainID:         chain.ID,
-		ChainGoalIndex:  index,
+		Goal:             goal.Goal,
+		Provider:         goal.Provider,
+		WorkspaceDir:     workspaceDir,
+		MaxSteps:         goal.MaxSteps,
+		PipelineMode:     goal.PipelineMode,
+		StrictnessLevel:  goal.StrictnessLevel,
+		AmbitionLevel:    goal.AmbitionLevel,
+		ContextMode:      goal.ContextMode,
+		RoleProfiles:     domain.DefaultRoleProfiles(goal.Provider),
+		RoleOverrides:    goal.RoleOverrides,
+		PreBuildCommands: goal.PreBuildCommands,
+		ChainID:          chain.ID,
+		ChainGoalIndex:   index,
 	})
 	if err != nil {
 		goal.Status = domain.ChainGoalStatusFailed
@@ -1584,6 +1587,42 @@ func (s *Service) runEngineVerificationForStep(ctx context.Context, job *domain.
 	return nil
 }
 
+// runPreBuildCommands executes each command in workspaceDir before engine
+// verification. Commands are parsed by splitting on spaces (no shell expansion),
+// so each entry should be a single executable with arguments, e.g. "go mod tidy".
+// Failures are logged but do not abort the engine build/test run (best-effort).
+func (s *Service) runPreBuildCommands(ctx context.Context, cmds []string, workspaceDir string) {
+	if len(cmds) == 0 {
+		return
+	}
+	for _, raw := range cmds {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		parts := strings.Fields(raw)
+		req := runtimeexec.Request{
+			Category: runtimeexec.CategoryBuild,
+			Command:  parts[0],
+			Args:     parts[1:],
+			Dir:      workspaceDir,
+			Timeout:  2 * time.Minute,
+		}
+		result, err := s.runtime.Run(ctx, req)
+		if err != nil {
+			// Best-effort: log and continue. Context cancellation is the only
+			// case where we should stop early (shutdown in progress).
+			if ctx.Err() != nil {
+				log.Printf("[engine] pre_build aborted (shutdown): %s", raw)
+				return
+			}
+			log.Printf("[engine] pre_build command failed (continuing): %q: %v -- stderr: %s", raw, err, strings.TrimSpace(result.Stderr))
+		} else {
+			log.Printf("[engine] pre_build command ok: %q", raw)
+		}
+	}
+}
+
 func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job, stepIndex int) ([]EngineCheckArtifact, string, string, error) {
 	workspaceDir := firstNonEmpty(job.WorkspaceDir, s.workspaceRoot)
 	if strings.TrimSpace(workspaceDir) == "" {
@@ -1595,6 +1634,11 @@ func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job,
 	if !hasGoWorkspace(workspaceDir) {
 		return engineSkippedArtifacts("workspace is not configured for Go"), "engine verification skipped: workspace is not configured for Go", "", nil
 	}
+
+	// Run pre-build commands before engine verification.
+	// These are best-effort: a failure is logged but does not skip build/test.
+	// Typical use: "go mod tidy", "npm install", "make generate".
+	s.runPreBuildCommands(ctx, job.PreBuildCommands, workspaceDir)
 
 	buildReq := runtimeexec.Request{
 		Category: runtimeexec.CategoryBuild,

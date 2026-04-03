@@ -280,16 +280,17 @@ func ValidChainStatus(status ChainStatus) bool {
 }
 
 type ChainGoal struct {
-	Goal            string                  `json:"goal"`
-	Provider        ProviderName            `json:"provider"`
-	PipelineMode    string                  `json:"pipeline_mode,omitempty"`
-	StrictnessLevel string                  `json:"strictness_level,omitempty"`
-	AmbitionLevel   string                  `json:"ambition_level,omitempty"`
-	ContextMode     string                  `json:"context_mode,omitempty"`
-	MaxSteps        int                     `json:"max_steps"`
-	RoleOverrides   map[string]RoleOverride `json:"role_overrides,omitempty"`
-	JobID           string                  `json:"job_id,omitempty"`
-	Status          string                  `json:"status"`
+	Goal             string                  `json:"goal"`
+	Provider         ProviderName            `json:"provider"`
+	PipelineMode     string                  `json:"pipeline_mode,omitempty"`
+	StrictnessLevel  string                  `json:"strictness_level,omitempty"`
+	AmbitionLevel    string                  `json:"ambition_level,omitempty"`
+	ContextMode      string                  `json:"context_mode,omitempty"`
+	MaxSteps         int                     `json:"max_steps"`
+	RoleOverrides    map[string]RoleOverride `json:"role_overrides,omitempty"`
+	PreBuildCommands []string                `json:"pre_build_commands,omitempty"`
+	JobID            string                  `json:"job_id,omitempty"`
+	Status           string                  `json:"status"`
 }
 
 type JobChain struct {
@@ -484,6 +485,11 @@ type Job struct {
 	// that the next provider call can include a correction hint in its prompt.
 	// It is cleared after each successful parse and is never persisted to disk
 	// (omitempty ensures it is excluded from JSON storage).
+	// PreBuildCommands are run in the workspace directory before engine
+	// verification (go build / go test). They are best-effort: failures are
+	// logged but do not prevent the build/test from running. Useful for
+	// language-agnostic setup steps such as "go mod tidy" or "npm install".
+	PreBuildCommands        []string                `json:"pre_build_commands,omitempty"`
 	SchemaRetryHint         string                  `json:"schema_retry_hint,omitempty"`
 	RunOwnerID              string                  `json:"run_owner_id,omitempty"`
 	RunHeartbeatAt          time.Time               `json:"run_heartbeat_at,omitempty"`
@@ -507,6 +513,7 @@ func CloneJob(src *Job) *Job {
 	dst.Constraints = append([]string(nil), src.Constraints...)
 	dst.DoneCriteria = append([]string(nil), src.DoneCriteria...)
 	dst.PlanningArtifacts = append([]string(nil), src.PlanningArtifacts...)
+	dst.PreBuildCommands = append([]string(nil), src.PreBuildCommands...)
 
 	// Deep-copy Steps (slice of structs, but each step has inner slices).
 	if len(src.Steps) > 0 {

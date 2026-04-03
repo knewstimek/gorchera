@@ -494,8 +494,13 @@ func toolList() []toolDef {
 					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light (default, skip reviewer) | balanced (add reviewer) | full (fix loops + parallel workers)", Default: "light", Enum: []string{"light", "balanced", "full"}},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
-					"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
-					"role_overrides":   roleOverridesSchema(),
+					"context_mode":        {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
+					"role_overrides":      roleOverridesSchema(),
+					"pre_build_commands": {
+						Type:        "array",
+						Description: "Commands to run before engine verification (e.g. go mod tidy, npm install). Runs in workspace directory. Best-effort: failures are logged but do not skip build/test.",
+						Items:       &schemaProp{Type: "string"},
+					},
 				},
 				Required: []string{"goal"},
 			},
@@ -518,8 +523,13 @@ func toolList() []toolDef {
 								"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 								"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
 								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto (auto selects based on step count)", Default: "full"},
-								"max_steps":        {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
-								"role_overrides":   roleOverridesSchema(),
+								"max_steps":          {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
+								"role_overrides":     roleOverridesSchema(),
+								"pre_build_commands": {
+									Type:        "array",
+									Description: "Commands to run before engine verification for this goal (e.g. go mod tidy, npm install). Best-effort.",
+									Items:       &schemaProp{Type: "string"},
+								},
 							},
 							Required: []string{"goal"},
 						},
@@ -675,7 +685,7 @@ func toolList() []toolDef {
 		},
 		{
 			Name:        "gorchera_resume",
-			Description: "Resume a specific recoverable job. Intended for blocked or interrupted non-terminal jobs; failed jobs should use gorchera_retry.",
+			Description: "Resume a blocked job from its current state (does NOT restart from scratch). Use when a job is in the Blocked state -- e.g. blocked by max_steps_exceeded. Supply extra_steps (1-20) to extend the step budget for max_steps_exceeded resumes. For PendingApproval state, use gorchera_approve or gorchera_reject instead. Failed jobs should use gorchera_retry.",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
@@ -854,18 +864,20 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 			roleOverrides = parseRoleOverrides(roMap)
 		}
 	}
+	preBuildCmds := stringSliceArg(args, "pre_build_commands")
 
 	input := orchestrator.CreateJobInput{
-		Goal:            goal,
-		Provider:        provider,
-		WorkspaceDir:    workspaceDir,
-		WorkspaceMode:   workspaceMode,
-		MaxSteps:        maxSteps,
-		StrictnessLevel: strictnessLevel,
-		AmbitionLevel:   ambitionLevel,
-		ContextMode:     contextMode,
-		RoleProfiles:    domain.DefaultRoleProfiles(provider),
-		RoleOverrides:   roleOverrides,
+		Goal:             goal,
+		Provider:         provider,
+		WorkspaceDir:     workspaceDir,
+		WorkspaceMode:    workspaceMode,
+		MaxSteps:         maxSteps,
+		StrictnessLevel:  strictnessLevel,
+		AmbitionLevel:    ambitionLevel,
+		ContextMode:      contextMode,
+		RoleProfiles:     domain.DefaultRoleProfiles(provider),
+		RoleOverrides:    roleOverrides,
+		PreBuildCommands: preBuildCmds,
 	}
 	setOptionalStringField(&input, "PipelineMode", pipelineMode)
 
@@ -900,12 +912,13 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 			return toolResult{}, fmt.Errorf("goals[%d] must be an object", i)
 		}
 		goal := domain.ChainGoal{
-			Goal:            stringArg(goalMap, "goal"),
-			Provider:        domain.ProviderName(stringArg(goalMap, "provider")),
-			StrictnessLevel: stringArgDefault(goalMap, "strictness_level", "normal"),
-			AmbitionLevel:   stringArgDefault(goalMap, "ambition_level", domain.AmbitionLevelMedium),
-			ContextMode:     stringArgDefault(goalMap, "context_mode", "full"),
-			MaxSteps:        intArgDefault(goalMap, "max_steps", 8),
+			Goal:             stringArg(goalMap, "goal"),
+			Provider:         domain.ProviderName(stringArg(goalMap, "provider")),
+			StrictnessLevel:  stringArgDefault(goalMap, "strictness_level", "normal"),
+			AmbitionLevel:    stringArgDefault(goalMap, "ambition_level", domain.AmbitionLevelMedium),
+			ContextMode:      stringArgDefault(goalMap, "context_mode", "full"),
+			MaxSteps:         intArgDefault(goalMap, "max_steps", 8),
+			PreBuildCommands: stringSliceArg(goalMap, "pre_build_commands"),
 		}
 		if roRaw, ok := goalMap["role_overrides"]; ok {
 			if roMap, ok := roRaw.(map[string]any); ok {
@@ -1371,6 +1384,29 @@ func gitCommandOutput(ctx context.Context, dir string, args ...string) (string, 
 func stringArg(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
+}
+
+// stringSliceArg extracts a []string from an []any value in args.
+// Returns nil if the key is absent or has the wrong type.
+func stringSliceArg(args map[string]any, key string) []string {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func stringArgDefault(args map[string]any, key, def string) string {
