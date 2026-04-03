@@ -48,6 +48,7 @@ go test ./...    # PASS
   - `workspace_mode=isolated` creates a detached git worktree at repository `HEAD`.
   - The job stores both `RequestedWorkspaceDir` and the actual isolated `WorkspaceDir`.
   - Promotion from isolated workspaces is manual for now; the detached worktree stays available for supervised diff review and merge.
+  - Worktree notification: when an isolated worktree job reaches a terminal state, the `notifications/job_terminal` payload includes `workspace_mode`, `workspace_dir`, `requested_workspace_dir`, and `diff_stat` (output of `git diff --stat` between the worktree and the requested workspace HEAD).
 - MCP stdio smoke coverage:
   - `cmd/mcp-smoke` runs isolated end-to-end MCP scenarios against a real `gorchera mcp` subprocess.
   - `basic` validates `initialize -> tools/list -> start_job -> status(wait=true)` using the mock provider.
@@ -90,6 +91,11 @@ go test ./...    # PASS
   - only after a provider command failure occurs before any structured response is produced
   - disabled when blank or equal to the primary model
   - does not replace `fallback_provider` lookup or retry invalid structured output
+
+### Schema retry and pre_build_commands
+
+- Schema retry: director, executor, and evaluator roles retry up to 2 additional times when the provider returns a response that fails schema validation. After 3 total failures the step is marked failed with `schema` classification.
+- pre_build_commands: `gorchera_start_job` (and the HTTP/CLI equivalents) accept a `pre_build_commands` string list. The engine runs these commands sequentially before invoking `go build`/`go test`, enabling language-agnostic setup (e.g. `go mod tidy`, `npm install`, `pip install -r requirements.txt`). Failures abort the engine phase and are reported as a `build` step failure.
 
 ### Structured provider errors and retry behavior
 
@@ -171,6 +177,7 @@ go test ./...    # PASS
   - `gorchera_start_chain` per-goal `ambition_level`
   - `gorchera_start_chain` per-goal `role_overrides`
   - `gorchera_resume.extra_steps` with MCP-side bounds (`1..20`)
+  - PendingApproval guard: `gorchera_resume` (and service-level `ResumeWithOptions`) rejects resume attempts on jobs that have a pending operator approval; callers must use `gorchera_approve` or `gorchera_reject` first
   - `wait=true` polling for job and chain status with configurable `wait_timeout` (default 30s, 0=5min maximum)
   - `gorchera_steer`
   - JSON-RPC terminal notifications via `notifications/job_terminal` with `{job_id, status, summary}`

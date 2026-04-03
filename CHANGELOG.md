@@ -3,6 +3,8 @@
 ## v2026.04.03
 
 ### Added
+- Schema retry: director/executor/evaluator retry up to 2 times on schema validation failure before marking the step failed
+- pre_build_commands: gorchera_start_job accepts a pre_build_commands list; engine runs these commands before go build/test (language-agnostic setup, e.g. go mod tidy, npm install)
 - Worktree notification: terminal notifications for isolated worktree jobs include workspace_mode, workspace_dir, requested_workspace_dir, diff_stat
 - PendingApproval guard: ResumeWithOptions rejects resume on jobs with pending approval (must use approve/reject)
 - Orchestrator-specific audit checklist in CLAUDE.md (evaluator gate bypass, approval policy bypass)

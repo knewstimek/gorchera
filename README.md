@@ -16,6 +16,8 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 - **Role overrides**: per-job provider/model overrides from MCP (e.g., evaluator=opus, executor=sonnet)
 - **Synchronous wait**: block on job/chain status with configurable timeout
 - **Self-improvement**: Gorchera can modify its own codebase via orchestrated jobs
+- **Schema retry**: up to 2 retries on schema validation failure per role (director/executor/evaluator)
+- **pre_build_commands**: run setup commands (e.g. `go mod tidy`, `npm install`) before engine build/test
 - **Error classification**: 12 error types with 3-strike retry policy
 - **Token tracking**: rough per-job and per-step token/cost estimation
 - **Security**: SUPERVISOR injection prevention, workspace validation, steer authorization
@@ -61,6 +63,7 @@ Light mode with cross-provider (director=GPT, executor=Claude Sonnet) costs ~$0.
 | `gorchera_resume_chain` | Resume paused chain |
 | `gorchera_cancel_chain` | Cancel entire chain |
 | `gorchera_skip_chain_goal` | Skip current chain goal |
+| `gorchera_diff` | Inspect workspace diff (pathspec-injection-safe) |
 
 ## Architecture
 
