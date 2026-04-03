@@ -1,6 +1,6 @@
 # Anthropic Blog Comparison
 
-This document compares the ideas in `Old/참고용.txt` ("Harness design for long-running application development") with the current Gorchera repository. The goal is to separate what Gorchera already implements from where it intentionally takes a different path, and to identify ideas from the blog that still look adoptable without claiming features that do not exist today.
+This document compares the ideas in [Anthropic's harness engineering post](https://www.reddit.com/r/ClaudeAI/comments/1s6jouf/anthropic_shares_how_to_make_claude_code_better) ("Harness design for long-running application development") with the current Gorchera repository. The goal is to separate what Gorchera already implements from where it intentionally takes a different path, and to identify ideas from the blog that still look adoptable without claiming features that do not exist today.
 
 ## Source Framing
 
@@ -162,6 +162,8 @@ The most valuable adoptable idea is the blog's criterion-based evaluator design.
 - fail completion when one axis misses its threshold, not just when step coverage looks insufficient
 
 This would fit Gorchera's existing evaluator-gated completion model rather than fight it.
+
+**Update (v2026.04.03.1):** Gorchera now has prompt overrides (`.gorchera/prompts/evaluator.md` or `prompt_overrides` job parameter) that allow per-project evaluator criteria customization without code changes. Combined with the existing `RubricAxes` in verification contracts, this partially addresses the rubric gap.
 
 ### 2. Browser-driven QA and richer runtime verification
 

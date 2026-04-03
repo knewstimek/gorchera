@@ -501,6 +501,8 @@ func toolList() []toolDef {
 						Description: "Commands to run before engine verification (e.g. go mod tidy, npm install). Runs in workspace directory. Best-effort: failures are logged but do not skip build/test.",
 						Items:       &schemaProp{Type: "string"},
 					},
+					"engine_build_cmd": {Type: "string", Description: "Override engine build command (default: go build ./...). Parsed by spaces; e.g. npm run build or make build."},
+					"engine_test_cmd":  {Type: "string", Description: "Override engine test command (default: go test ./...). Parsed by spaces; e.g. npm test or make test."},
 					"prompt_overrides": {
 						Type:        "object",
 						Description: "Per-role prompt overrides (prepend to default prompt). Keys: director, executor, evaluator, reviewer. Values: additional instructions prepended to the role's system prompt. Replace mode is not available via job parameters (use .gorchera/prompts/{role}.md with # REPLACE for that).",
@@ -534,6 +536,8 @@ func toolList() []toolDef {
 									Description: "Commands to run before engine verification for this goal (e.g. go mod tidy, npm install). Best-effort.",
 									Items:       &schemaProp{Type: "string"},
 								},
+								"engine_build_cmd": {Type: "string", Description: "Override engine build command for this goal (default: go build ./...). e.g. npm run build"},
+								"engine_test_cmd":  {Type: "string", Description: "Override engine test command for this goal (default: go test ./...). e.g. npm test"},
 							},
 							Required: []string{"goal"},
 						},
@@ -869,6 +873,8 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		}
 	}
 	preBuildCmds := stringSliceArg(args, "pre_build_commands")
+	engineBuildCmd := stringArg(args, "engine_build_cmd")
+	engineTestCmd := stringArg(args, "engine_test_cmd")
 	promptOverrides := parsePromptOverrides(args)
 
 	input := orchestrator.CreateJobInput{
@@ -883,6 +889,8 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		RoleProfiles:     domain.DefaultRoleProfiles(provider),
 		RoleOverrides:    roleOverrides,
 		PreBuildCommands: preBuildCmds,
+		EngineBuildCmd:   engineBuildCmd,
+		EngineTestCmd:    engineTestCmd,
 		PromptOverrides:  promptOverrides,
 	}
 	setOptionalStringField(&input, "PipelineMode", pipelineMode)
@@ -925,6 +933,8 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 			ContextMode:      stringArgDefault(goalMap, "context_mode", "full"),
 			MaxSteps:         intArgDefault(goalMap, "max_steps", 8),
 			PreBuildCommands: stringSliceArg(goalMap, "pre_build_commands"),
+			EngineBuildCmd:   stringArg(goalMap, "engine_build_cmd"),
+			EngineTestCmd:    stringArg(goalMap, "engine_test_cmd"),
 		}
 		if roRaw, ok := goalMap["role_overrides"]; ok {
 			if roMap, ok := roRaw.(map[string]any); ok {

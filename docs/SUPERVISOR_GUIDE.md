@@ -160,6 +160,38 @@ Each entry is split on whitespace (no shell expansion). Use one command per entr
 For shell logic, wrap it: `"sh -c \"go mod tidy && go mod verify\""` is NOT supported --
 use two separate entries instead: `["go mod tidy", "go mod verify"]`.
 
+## engine_build_cmd / engine_test_cmd
+
+Override the engine verification commands when the project is not a Go project.
+By default, gorchera runs `go build ./...` and `go test ./...` after each executor step.
+For non-Go projects, set these parameters to match the project toolchain.
+
+```json
+{
+  "goal": "...",
+  "workspace_dir": "/path/to/project",
+  "engine_build_cmd": "npm run build",
+  "engine_test_cmd": "npm test"
+}
+```
+
+Common examples by language:
+
+| Language | engine_build_cmd | engine_test_cmd |
+|----------|-----------------|----------------|
+| Go (default) | _(omit)_ | _(omit)_ |
+| Node/npm | `npm run build` | `npm test` |
+| Node/pnpm | `pnpm run build` | `pnpm test` |
+| Python | `python -m py_compile src/main.py` | `pytest` |
+| Make | `make build` | `make test` |
+| Rust | `cargo build` | `cargo test` |
+
+**Notes:**
+- Commands are parsed via `strings.Fields` (split on whitespace). No shell expansion.
+- When `engine_build_cmd` is set, the Go workspace check (`go.mod`/`go.work`) is bypassed.
+- Both commands are independent; you can override only one (e.g. set `engine_test_cmd` only).
+- Works with `gorchera_start_job` and per-goal in `gorchera_start_chain`.
+
 ## Operational Tips
 
 - **Never cancel a job because status looks stuck.** Planner/executor can take 5-10 minutes. Check process list or worktree diff instead.

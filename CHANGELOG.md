@@ -6,6 +6,7 @@
 - Prompt overrides: per-role prompt customization via .gorchera/prompts/{role}.md files (prepend or replace) and gorchera_start_job prompt_overrides parameter
 - Schema retry: director/executor/evaluator retry up to 2 times on schema validation failure before marking the step failed
 - pre_build_commands: gorchera_start_job accepts a pre_build_commands list; engine runs these commands before go build/test (language-agnostic setup, e.g. go mod tidy, npm install)
+- engine_build_cmd / engine_test_cmd: override engine verification commands per job (e.g. npm run build / npm test for Node projects); empty = default Go commands
 - Worktree notification: terminal notifications for isolated worktree jobs include workspace_mode, workspace_dir, requested_workspace_dir, diff_stat
 - PendingApproval guard: ResumeWithOptions rejects resume on jobs with pending approval (must use approve/reject)
 - Orchestrator-specific audit checklist in CLAUDE.md (evaluator gate bypass, approval policy bypass)

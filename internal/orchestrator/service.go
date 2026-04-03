@@ -63,6 +63,8 @@ type CreateJobInput struct {
 	AmbitionLevel    string            // low | medium | high; empty or unrecognized defaults to "medium"
 	ContextMode      string            // full | summary | minimal; empty defaults to "full"
 	PreBuildCommands []string          // run before engine build/test (best-effort)
+	EngineBuildCmd   string            // overrides default "go build ./..."; empty = default
+	EngineTestCmd    string            // overrides default "go test ./..."; empty = default
 	PromptOverrides  map[string]string // per-role prompt fragments prepended at call time
 	ChainID          string
 	ChainGoalIndex   int
@@ -437,6 +439,8 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		RoleProfiles:          roleProfiles,
 		RoleOverrides:         canonicalizeRoleOverrides(input.RoleOverrides),
 		PreBuildCommands:      input.PreBuildCommands,
+		EngineBuildCmd:        strings.TrimSpace(input.EngineBuildCmd),
+		EngineTestCmd:         strings.TrimSpace(input.EngineTestCmd),
 		PromptOverrides:       canonicalizePromptOverrides(input.PromptOverrides),
 		ChainID:               strings.TrimSpace(input.ChainID),
 		ChainGoalIndex:        input.ChainGoalIndex,
@@ -590,6 +594,8 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		RoleProfiles:     domain.DefaultRoleProfiles(goal.Provider),
 		RoleOverrides:    goal.RoleOverrides,
 		PreBuildCommands: goal.PreBuildCommands,
+		EngineBuildCmd:   goal.EngineBuildCmd,
+		EngineTestCmd:    goal.EngineTestCmd,
 		ChainID:          chain.ID,
 		ChainGoalIndex:   index,
 	})
@@ -1648,13 +1654,23 @@ func (s *Service) runPreBuildCommands(ctx context.Context, cmds []string, worksp
 func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job, stepIndex int) ([]EngineCheckArtifact, string, string, error) {
 	workspaceDir := firstNonEmpty(job.WorkspaceDir, s.workspaceRoot)
 	if strings.TrimSpace(workspaceDir) == "" {
-		return engineSkippedArtifacts("workspace directory is not available"), "engine verification skipped: workspace directory is not available", "", nil
+		return engineSkippedArtifacts(job.EngineBuildCmd, job.EngineTestCmd, "workspace directory is not available"), "engine verification skipped: workspace directory is not available", "", nil
 	}
-	if _, err := s.runtime.LookPath("go"); err != nil {
-		return engineSkippedArtifacts("go executable is not available"), "engine verification skipped: go executable is not available", "", nil
-	}
-	if !hasGoWorkspace(workspaceDir) {
-		return engineSkippedArtifacts("workspace is not configured for Go"), "engine verification skipped: workspace is not configured for Go", "", nil
+
+	// Resolve the build and test commands. Custom commands bypass the Go-specific
+	// workspace checks so that non-Go projects (Node, Python, etc.) work correctly.
+	buildCmd, buildArgs, buildCmdStr := resolveEngineCommand(job.EngineBuildCmd, "go", []string{"build", "./..."})
+	testCmd, testArgs, testCmdStr := resolveEngineCommand(job.EngineTestCmd, "go", []string{"test", "./..."})
+
+	// When using the default Go commands, require a valid Go workspace.
+	// Custom commands skip this check -- the caller knows their own toolchain.
+	if job.EngineBuildCmd == "" {
+		if _, err := s.runtime.LookPath("go"); err != nil {
+			return engineSkippedArtifacts(job.EngineBuildCmd, job.EngineTestCmd, "go executable is not available"), "engine verification skipped: go executable is not available", "", nil
+		}
+		if !hasGoWorkspace(workspaceDir) {
+			return engineSkippedArtifacts(job.EngineBuildCmd, job.EngineTestCmd, "workspace is not configured for Go"), "engine verification skipped: workspace is not configured for Go", "", nil
+		}
 	}
 
 	// Run pre-build commands before engine verification.
@@ -1664,8 +1680,8 @@ func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job,
 
 	buildReq := runtimeexec.Request{
 		Category: runtimeexec.CategoryBuild,
-		Command:  "go",
-		Args:     []string{"build", "./..."},
+		Command:  buildCmd,
+		Args:     buildArgs,
 		Dir:      workspaceDir,
 		Timeout:  5 * time.Minute,
 	}
@@ -1680,8 +1696,8 @@ func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job,
 		testRecord := EngineCheckArtifact{
 			Kind:    "test",
 			Status:  engineCheckSkipped,
-			Command: "go test ./...",
-			Reason:  "go build ./... failed",
+			Command: testCmdStr,
+			Reason:  buildCmdStr + " failed",
 		}
 		records = append(records, testRecord)
 		summaryParts = append(summaryParts, formatEngineCheckSummary(testRecord))
@@ -1690,8 +1706,8 @@ func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job,
 
 	testReq := runtimeexec.Request{
 		Category: runtimeexec.CategoryTest,
-		Command:  "go",
-		Args:     []string{"test", "./..."},
+		Command:  testCmd,
+		Args:     testArgs,
 		Dir:      workspaceDir,
 		Timeout:  5 * time.Minute,
 	}
@@ -1708,14 +1724,30 @@ func (s *Service) executeEngineVerification(ctx context.Context, job domain.Job,
 	return records, strings.Join(summaryParts, "; "), "", nil
 }
 
+// resolveEngineCommand parses a custom command string (e.g. "npm run build") into
+// executable + args using strings.Fields. Falls back to defaultCmd/defaultArgs when
+// custom is empty. Returns the executable, args, and a human-readable command string.
+func resolveEngineCommand(custom, defaultCmd string, defaultArgs []string) (string, []string, string) {
+	if strings.TrimSpace(custom) == "" {
+		return defaultCmd, defaultArgs, strings.Join(append([]string{defaultCmd}, defaultArgs...), " ")
+	}
+	parts := strings.Fields(custom)
+	if len(parts) == 1 {
+		return parts[0], nil, parts[0]
+	}
+	return parts[0], parts[1:], custom
+}
+
 func engineVerificationArtifactName(stepIndex int, kind string) string {
 	return fmt.Sprintf("step-%02d-engine_%s.json", stepIndex, kind)
 }
 
-func engineSkippedArtifacts(reason string) []EngineCheckArtifact {
+func engineSkippedArtifacts(buildCmd, testCmd, reason string) []EngineCheckArtifact {
+	_, _, buildStr := resolveEngineCommand(buildCmd, "go", []string{"build", "./..."})
+	_, _, testStr := resolveEngineCommand(testCmd, "go", []string{"test", "./..."})
 	return []EngineCheckArtifact{
-		{Kind: "build", Status: engineCheckSkipped, Command: "go build ./...", Reason: reason},
-		{Kind: "test", Status: engineCheckSkipped, Command: "go test ./...", Reason: reason},
+		{Kind: "build", Status: engineCheckSkipped, Command: buildStr, Reason: reason},
+		{Kind: "test", Status: engineCheckSkipped, Command: testStr, Reason: reason},
 	}
 }
 

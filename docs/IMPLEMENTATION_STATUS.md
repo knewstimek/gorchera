@@ -102,6 +102,7 @@ go test ./...    # PASS
 
 - Schema retry: director, executor, and evaluator roles retry up to 2 additional times when the provider returns a response that fails schema validation. After 3 total failures the step is marked failed with `schema` classification.
 - pre_build_commands: `gorchera_start_job` (and the HTTP/CLI equivalents) accept a `pre_build_commands` string list. The engine runs these commands sequentially before invoking `go build`/`go test`, enabling language-agnostic setup (e.g. `go mod tidy`, `npm install`, `pip install -r requirements.txt`). Failures abort the engine phase and are reported as a `build` step failure.
+- engine_build_cmd / engine_test_cmd: `gorchera_start_job` and per-goal in `gorchera_start_chain` accept optional `engine_build_cmd` and `engine_test_cmd` string parameters. When set, these override the default `go build ./...` / `go test ./...` commands. Commands are parsed via `strings.Fields` (no shell expansion). Setting `engine_build_cmd` bypasses the Go workspace check so non-Go projects work correctly.
 
 ### Structured provider errors and retry behavior
 

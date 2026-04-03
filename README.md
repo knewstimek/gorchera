@@ -18,6 +18,7 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 - **Self-improvement**: Gorchera can modify its own codebase via orchestrated jobs
 - **Schema retry**: up to 2 retries on schema validation failure per role (director/executor/evaluator)
 - **pre_build_commands**: run setup commands (e.g. `go mod tidy`, `npm install`) before engine build/test
+- **engine_build_cmd / engine_test_cmd**: override engine verification commands per job (e.g. `npm run build` / `npm test` for Node projects)
 - **Error classification**: 12 error types with 3-strike retry policy
 - **Token tracking**: rough per-job and per-step token/cost estimation
 - **Security**: SUPERVISOR injection prevention, workspace validation, steer authorization

@@ -289,6 +289,8 @@ type ChainGoal struct {
 	MaxSteps         int                     `json:"max_steps"`
 	RoleOverrides    map[string]RoleOverride `json:"role_overrides,omitempty"`
 	PreBuildCommands []string                `json:"pre_build_commands,omitempty"`
+	EngineBuildCmd   string                  `json:"engine_build_cmd,omitempty"`
+	EngineTestCmd    string                  `json:"engine_test_cmd,omitempty"`
 	JobID            string                  `json:"job_id,omitempty"`
 	Status           string                  `json:"status"`
 }
@@ -490,6 +492,14 @@ type Job struct {
 	// logged but do not prevent the build/test from running. Useful for
 	// language-agnostic setup steps such as "go mod tidy" or "npm install".
 	PreBuildCommands        []string                `json:"pre_build_commands,omitempty"`
+	// EngineBuildCmd overrides the default build command ("go build ./...").
+	// Parsed via strings.Fields; e.g. "npm run build" or "make build".
+	// Empty means use the default.
+	EngineBuildCmd          string                  `json:"engine_build_cmd,omitempty"`
+	// EngineTestCmd overrides the default test command ("go test ./...").
+	// Parsed via strings.Fields; e.g. "npm test" or "make test".
+	// Empty means use the default.
+	EngineTestCmd           string                  `json:"engine_test_cmd,omitempty"`
 	// PromptOverrides carries per-role prompt fragments that the provider
 	// prepends to the hardcoded base prompt before each role call.
 	// Keys are role names (director, executor, reviewer, evaluator).
