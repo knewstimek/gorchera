@@ -493,7 +493,8 @@ func toolList() []toolDef {
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
 					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light (default, skip reviewer) | balanced (add reviewer) | full (fix loops + parallel workers)", Default: "light", Enum: []string{"light", "balanced", "full"}},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
-					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
+					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high | custom", Default: "medium", Enum: []string{"low", "medium", "high", "custom"}},
+					"ambition_text":    {Type: "string", Description: "Custom ambition text. With custom level: replaces default. With low/medium/high: prepended to default. See SUPERVISOR_GUIDE.md for defaults."},
 					"context_mode":        {Type: "string", Description: "Leader context mode: full | summary | minimal | auto. full=entire job state, summary=recent steps+compressed history, minimal=last step+counts only, auto=auto selects based on step count", Default: "full"},
 					"role_overrides":      roleOverridesSchema(),
 					"pre_build_commands": {
@@ -527,7 +528,8 @@ func toolList() []toolDef {
 								"goal":             {Type: "string", Description: "Natural-language goal for this chain step"},
 								"provider":         {Type: "string", Description: "Provider name: mock | codex | claude"},
 								"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
-								"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high", Default: "medium"},
+								"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high | custom", Default: "medium", Enum: []string{"low", "medium", "high", "custom"}},
+								"ambition_text":    {Type: "string", Description: "Custom ambition text. With custom level: replaces default. With low/medium/high: prepended to default. See SUPERVISOR_GUIDE.md for defaults."},
 								"context_mode":     {Type: "string", Description: "Leader context mode: full | summary | minimal | auto (auto selects based on step count)", Default: "full"},
 								"max_steps":          {Type: "integer", Description: "Maximum leader steps for this goal", Default: 8},
 								"role_overrides":     roleOverridesSchema(),
@@ -858,6 +860,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	pipelineMode := stringArgDefault(args, "pipeline_mode", "light")
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
 	ambitionLevel := stringArgDefault(args, "ambition_level", domain.AmbitionLevelMedium)
+	ambitionText := stringArg(args, "ambition_text")
 	contextMode := stringArgDefault(args, "context_mode", "full")
 	if err := orchestrator.ValidateWorkspaceDir(workspaceDir); err != nil {
 		return toolResult{}, err
@@ -885,6 +888,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		MaxSteps:         maxSteps,
 		StrictnessLevel:  strictnessLevel,
 		AmbitionLevel:    ambitionLevel,
+		AmbitionText:     ambitionText,
 		ContextMode:      contextMode,
 		RoleProfiles:     domain.DefaultRoleProfiles(provider),
 		RoleOverrides:    roleOverrides,
@@ -930,6 +934,7 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 			Provider:         domain.ProviderName(stringArg(goalMap, "provider")),
 			StrictnessLevel:  stringArgDefault(goalMap, "strictness_level", "normal"),
 			AmbitionLevel:    stringArgDefault(goalMap, "ambition_level", domain.AmbitionLevelMedium),
+			AmbitionText:     stringArg(goalMap, "ambition_text"),
 			ContextMode:      stringArgDefault(goalMap, "context_mode", "full"),
 			MaxSteps:         intArgDefault(goalMap, "max_steps", 8),
 			PreBuildCommands: stringSliceArg(goalMap, "pre_build_commands"),

@@ -3,6 +3,8 @@
 ## v2026.04.03
 
 ### Added
+- ambition_text: custom ambition guidance injected into executor and evaluator prompts. With ambition_level=custom: replaces default text entirely (falls back to medium if blank). With low/medium/high: prepended to default text. Both gorchera_start_job and per-goal gorchera_start_chain support this parameter.
+- SUPERVISOR_GUIDE.md: Ambition Levels section now documents exact default prompt text for all levels and shows custom/prepend usage examples.
 - Prompt overrides: per-role prompt customization via .gorchera/prompts/{role}.md files (prepend or replace) and gorchera_start_job prompt_overrides parameter
 - Schema retry: director/executor/evaluator retry up to 2 times on schema validation failure before marking the step failed
 - pre_build_commands: gorchera_start_job accepts a pre_build_commands list; engine runs these commands before go build/test (language-agnostic setup, e.g. go mod tidy, npm install)

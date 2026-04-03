@@ -23,7 +23,7 @@ go test ./...    # PASS
   - `auto`: defers level selection to the planner phase; planner's `recommended_strictness` and `recommended_max_steps` are adopted before the sprint contract is built; falls back to `normal` if recommendation is absent or unrecognised
 - Evaluator rubric scoring: `VerificationContract.RubricAxes` defines per-axis thresholds (`name`, `weight`, `min_threshold`). The provider evaluator returns `RubricScores` (0.0-1.0 per axis). `mergeEvaluatorReport()` enforces thresholds additively -- rubric can only demote a passing report, never promote a failing one.
 - Planner prompt includes role profiles (provider/model per role) to inform `recommended_strictness` and `recommended_max_steps`; chain context section injected when `job.ChainContext` is present.
-- Jobs and chain goals now carry `ambition_level` (`low | medium | high`); omitted or unrecognized input defaults to `medium`.
+- Jobs and chain goals carry `ambition_level` (`low | medium | high | custom`) and `ambition_text`. When level=custom and text is present, ambition_text fully replaces the default executor/evaluator guidance; when level is low/medium/high and text is present, it is prepended. Omitted or unrecognized level defaults to `medium`. See SUPERVISOR_GUIDE.md for exact default prompt text per level.
 - Role-specific worker prompts are differentiated:
   - executor: implementation-focused with ambition-aware autonomy guidance (`low` = fix only, `medium` = allow directly related improvements, `high` = allow justified structural expansion)
   - reviewer: adversarial review focused on counterexamples, regressions, lifecycle/restart/retry/recovery/idempotency issues, and state-transition safety

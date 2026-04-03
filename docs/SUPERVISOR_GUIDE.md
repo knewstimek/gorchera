@@ -18,17 +18,57 @@ Done when: [completion criteria -- build passes, specific behavior verified]
 
 ## Ambition Levels
 
-Control how much autonomy workers get via `ambition_level`:
+Control how much autonomy workers get via `ambition_level`.
 
-- **low** (fix): "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task."
-- **medium** (implement, default): "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope."
-- **high** (improve): "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention."
+### Default prompts
+
+The exact text injected into executor and evaluator prompts:
+
+| Level | Executor prompt | Evaluator prompt |
+|-------|----------------|-----------------|
+| low | "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task." | "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion." |
+| medium (default) | "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope." | "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope." |
+| high | "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified." | "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task." |
+| custom | _(replaced by ambition_text; falls back to medium if ambition_text is blank)_ | _(same)_ |
+
+### Custom ambition
+
+Use `ambition_text` to fine-tune the injected guidance without writing code.
+
+**custom level -- full replacement** (ambition_text replaces the default entirely):
+
+```json
+{
+  "ambition_level": "custom",
+  "ambition_text": "Fix only the reported bug. Zero scope expansion. Do not touch unrelated files."
+}
+```
+
+**low/medium/high + ambition_text -- prepend** (ambition_text is prepended before the default):
+
+```json
+{
+  "ambition_level": "high",
+  "ambition_text": "Focus on performance optimization. Prefer algorithmic improvements over micro-optimizations."
+}
+```
+
+The prepended text is rendered as:
+```
+Autonomy guidance:
+<ambition_text>
+
+<default level text>
+```
+
+Both executor and evaluator receive the same transformed guidance.
 
 ### Examples by ambition
 
 - **low**: "H2: change token comparison to constant-time"
 - **medium**: "Fix audit V2 CRITICAL/HIGH 5 items + build/test pass"
 - **high**: "Status API is blind during execution, causing supervisor to kill healthy jobs. Fix the root cause and propose a structure that prevents similar visibility problems."
+- **custom**: Surgical constraint or domain-specific rule that none of the presets express precisely.
 
 Higher ambition = more context and autonomy needed in the goal.
 

@@ -247,26 +247,55 @@ Output requirements (all fields required in JSON):
 	return applyPromptOverrides(base, "director", job.WorkspaceDir, job.PromptOverrides)
 }
 
-func ambitionInstruction(level string) string {
-	switch domain.NormalizeAmbitionLevel(level) {
+// ambitionInstruction returns the executor autonomy guidance text.
+// When ambition_text is provided:
+//   - level=custom: ambition_text fully replaces the default (falls back to medium if blank)
+//   - low/medium/high: ambition_text is prepended to the default with a blank-line separator
+func ambitionInstruction(level, ambitionText string) string {
+	normalized := domain.NormalizeAmbitionLevel(level)
+	var base string
+	switch normalized {
 	case domain.AmbitionLevelLow:
-		return "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task."
+		base = "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task."
 	case domain.AmbitionLevelHigh:
-		return "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified."
+		base = "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified."
+	case domain.AmbitionLevelCustom:
+		// custom with no text: fall back to medium behavior
+		if strings.TrimSpace(ambitionText) == "" {
+			return "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope."
+		}
+		return "Autonomy guidance:\n" + strings.TrimSpace(ambitionText)
 	default:
-		return "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope."
+		base = "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope."
 	}
+	if strings.TrimSpace(ambitionText) != "" {
+		return "Autonomy guidance:\n" + strings.TrimSpace(ambitionText) + "\n\n" + base
+	}
+	return base
 }
 
-func ambitionEvaluationGuidance(level string) string {
-	switch domain.NormalizeAmbitionLevel(level) {
+// ambitionEvaluationGuidance returns the evaluator gate guidance text.
+// Same prepend/replace logic as ambitionInstruction.
+func ambitionEvaluationGuidance(level, ambitionText string) string {
+	normalized := domain.NormalizeAmbitionLevel(level)
+	var base string
+	switch normalized {
 	case domain.AmbitionLevelLow:
-		return "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion."
+		base = "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion."
 	case domain.AmbitionLevelHigh:
-		return "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task."
+		base = "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task."
+	case domain.AmbitionLevelCustom:
+		if strings.TrimSpace(ambitionText) == "" {
+			return "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope."
+		}
+		return "Autonomy guidance:\n" + strings.TrimSpace(ambitionText)
 	default:
-		return "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope."
+		base = "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope."
 	}
+	if strings.TrimSpace(ambitionText) != "" {
+		return "Autonomy guidance:\n" + strings.TrimSpace(ambitionText) + "\n\n" + base
+	}
+	return base
 }
 
 func buildEvaluatorPrompt(job domain.Job) string {
@@ -324,7 +353,7 @@ Current job state:
 
 Verification contract:
 %s
-`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, schemaRetrySection, buildCompactEvaluatorPayload(job), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel, job.AmbitionText), job.Goal, rubricSection, schemaRetrySection, buildCompactEvaluatorPayload(job), contractPayload))
 	return applyPromptOverrides(base, "evaluator", job.WorkspaceDir, job.PromptOverrides)
 }
 
@@ -911,7 +940,7 @@ File management rules:
 
 Job state:
 %s
-`, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), buildCompactExecutorPayload(job, task)))
+`, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel, job.AmbitionText), string(taskPayload), buildCompactExecutorPayload(job, task)))
 	return applyPromptOverrides(executorBase, "executor", job.WorkspaceDir, job.PromptOverrides)
 }
 

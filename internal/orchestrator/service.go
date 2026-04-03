@@ -60,7 +60,8 @@ type CreateJobInput struct {
 	MaxSteps         int
 	PipelineMode     string
 	StrictnessLevel  string            // strict | normal | lenient; empty defaults to "normal"
-	AmbitionLevel    string            // low | medium | high; empty or unrecognized defaults to "medium"
+	AmbitionLevel    string            // low | medium | high | custom; empty or unrecognized defaults to "medium"
+	AmbitionText     string            // custom text; replaces default when level=custom, prepended otherwise
 	ContextMode      string            // full | summary | minimal; empty defaults to "full"
 	PreBuildCommands []string          // run before engine build/test (best-effort)
 	EngineBuildCmd   string            // overrides default "go build ./..."; empty = default
@@ -435,6 +436,7 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		PipelineMode:          domain.NormalizePipelineMode(input.PipelineMode),
 		StrictnessLevel:       normalizeStrictnessLevel(input.StrictnessLevel),
 		AmbitionLevel:         domain.NormalizeAmbitionLevel(input.AmbitionLevel),
+		AmbitionText:          strings.TrimSpace(input.AmbitionText),
 		ContextMode:           normalizeContextMode(input.ContextMode),
 		RoleProfiles:          roleProfiles,
 		RoleOverrides:         canonicalizeRoleOverrides(input.RoleOverrides),
@@ -590,6 +592,7 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		PipelineMode:     goal.PipelineMode,
 		StrictnessLevel:  goal.StrictnessLevel,
 		AmbitionLevel:    goal.AmbitionLevel,
+		AmbitionText:     goal.AmbitionText,
 		ContextMode:      goal.ContextMode,
 		RoleProfiles:     domain.DefaultRoleProfiles(goal.Provider),
 		RoleOverrides:    goal.RoleOverrides,

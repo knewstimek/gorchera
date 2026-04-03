@@ -69,6 +69,7 @@ const (
 	AmbitionLevelLow    = "low"
 	AmbitionLevelMedium = "medium"
 	AmbitionLevelHigh   = "high"
+	AmbitionLevelCustom = "custom"
 )
 
 type ExecutionProfile struct {
@@ -186,6 +187,8 @@ func NormalizeAmbitionLevel(level string) string {
 		return AmbitionLevelLow
 	case AmbitionLevelHigh:
 		return AmbitionLevelHigh
+	case AmbitionLevelCustom:
+		return AmbitionLevelCustom
 	default:
 		return AmbitionLevelMedium
 	}
@@ -285,6 +288,7 @@ type ChainGoal struct {
 	PipelineMode     string                  `json:"pipeline_mode,omitempty"`
 	StrictnessLevel  string                  `json:"strictness_level,omitempty"`
 	AmbitionLevel    string                  `json:"ambition_level,omitempty"`
+	AmbitionText     string                  `json:"ambition_text,omitempty"`
 	ContextMode      string                  `json:"context_mode,omitempty"`
 	MaxSteps         int                     `json:"max_steps"`
 	RoleOverrides    map[string]RoleOverride `json:"role_overrides,omitempty"`
@@ -459,7 +463,8 @@ type Job struct {
 	DoneCriteria            []string                `json:"done_criteria,omitempty"`
 	PipelineMode            string                  `json:"pipeline_mode,omitempty"`
 	StrictnessLevel         string                  `json:"strictness_level,omitempty"` // strict | normal | lenient
-	AmbitionLevel           string                  `json:"ambition_level,omitempty"`   // low | medium | high
+	AmbitionLevel           string                  `json:"ambition_level,omitempty"`   // low | medium | high | custom
+	AmbitionText            string                  `json:"ambition_text,omitempty"`    // custom text; replaces default when level=custom, prepended otherwise
 	ContextMode             string                  `json:"context_mode,omitempty"`     // full | summary | minimal
 	RoleProfiles            RoleProfiles            `json:"role_profiles"`
 	RoleOverrides           map[string]RoleOverride `json:"role_overrides,omitempty"`
