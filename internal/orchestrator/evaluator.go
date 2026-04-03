@@ -84,14 +84,35 @@ func (s *Service) runEvaluatorPhase(ctx context.Context, job *domain.Job, verifi
 		return domain.EvaluatorReport{}, err
 	}
 	s.accumulateTokenUsage(job, phaseJob.CurrentStep, estimateProviderUsage(phaseJob, domain.RoleEvaluator, raw, phaseJob))
+
+	// schemaRetry: retry up to schemaRetryMax times when JSON/schema
+	// validation fails. The hint is injected into phaseJob so the prompt
+	// includes a correction directive on the next call.
 	var out domain.EvaluatorReport
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return domain.EvaluatorReport{}, err
+	for schemaAttempt := 0; ; schemaAttempt++ {
+		parseErr := json.Unmarshal([]byte(raw), &out)
+		if parseErr == nil {
+			parseErr = validateEvaluatorReport(out, *job)
+		}
+		if parseErr == nil {
+			job.SchemaRetryHint = ""
+			return out, nil
+		}
+		if schemaAttempt >= schemaRetryMax {
+			job.SchemaRetryHint = ""
+			return domain.EvaluatorReport{}, fmt.Errorf("evaluator schema validation failed after %d attempts: %w", schemaRetryMax+1, parseErr)
+		}
+		hint := parseErr.Error()
+		s.addEvent(job, "schema_retry", fmt.Sprintf("evaluator schema retry %d/%d: %s", schemaAttempt+1, schemaRetryMax, hint))
+		job.SchemaRetryHint = hint
+		phaseJob.SchemaRetryHint = hint
+		raw, err = s.sessions.RunEvaluator(ctx, phaseJob)
+		if err != nil {
+			job.SchemaRetryHint = ""
+			return domain.EvaluatorReport{}, fmt.Errorf("evaluator schema retry failed: %w", err)
+		}
+		s.accumulateTokenUsage(job, phaseJob.CurrentStep, estimateProviderUsage(phaseJob, domain.RoleEvaluator, raw, phaseJob))
 	}
-	if err := validateEvaluatorReport(out, *job); err != nil {
-		return domain.EvaluatorReport{}, err
-	}
-	return out, nil
 }
 
 func successfulStepTypes(job *domain.Job) []string {

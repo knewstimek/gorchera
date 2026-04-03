@@ -480,6 +480,11 @@ type Job struct {
 	Summary                 string                  `json:"summary,omitempty"`
 	LeaderContextSummary    string                  `json:"leader_context_summary,omitempty"`
 	SupervisorDirective     string                  `json:"supervisor_directive,omitempty"`
+	// SchemaRetryHint carries the previous schema validation error message so
+	// that the next provider call can include a correction hint in its prompt.
+	// It is cleared after each successful parse and is never persisted to disk
+	// (omitempty ensures it is excluded from JSON storage).
+	SchemaRetryHint         string                  `json:"schema_retry_hint,omitempty"`
 	RunOwnerID              string                  `json:"run_owner_id,omitempty"`
 	RunHeartbeatAt          time.Time               `json:"run_heartbeat_at,omitempty"`
 	TokenUsage              TokenUsage              `json:"token_usage"`

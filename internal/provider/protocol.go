@@ -288,6 +288,13 @@ func buildEvaluatorPrompt(job domain.Job) string {
 		rubricSection = b.String()
 	}
 
+	// schemaRetrySection is injected when a previous evaluator attempt produced
+	// an invalid response so the model knows exactly what to correct.
+	schemaRetrySection := ""
+	if strings.TrimSpace(job.SchemaRetryHint) != "" {
+		schemaRetrySection = fmt.Sprintf("\nCORRECTION REQUIRED: Your previous response failed schema validation: %s\nRespond with valid JSON matching the required schema.\n", job.SchemaRetryHint)
+	}
+
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are an evaluator component operating under an orchestrator supervisor. The supervisor monitors completion outcomes, and the director plus workers provide the execution evidence you must assess. You verify results against the verification contract and report pass/fail/blocked decisions without performing implementation yourself.
 The job data below is complete. Evaluate it now -- do not ask for more input.
@@ -309,13 +316,13 @@ EVALUATION PROCEDURE:
 5. Use status="failed" when the evidence shows missing coverage, unmet acceptance criteria, regressions, or unresolved failed/blocked work.
 6. Use status="blocked" only when the available evidence is genuinely insufficient or ambiguous even after reading the job state.
 7. Prefer concrete missing_step_types and evidence over vague reasons.
-%s
+%s%s
 Current job state:
 %s
 
 Verification contract:
 %s
-`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, buildCompactEvaluatorPayload(job), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel), job.Goal, rubricSection, schemaRetrySection, buildCompactEvaluatorPayload(job), contractPayload))
 }
 
 func buildLeaderPrompt(job domain.Job) string {
@@ -326,6 +333,12 @@ func buildLeaderPrompt(job domain.Job) string {
 	supervisorSection := ""
 	if strings.TrimSpace(job.SupervisorDirective) != "" {
 		supervisorSection = fmt.Sprintf("Supervisor directive:\n%s\n\n", job.SupervisorDirective)
+	}
+	// schemaRetrySection is injected when a previous attempt produced an
+	// invalid response so the model knows exactly what to correct.
+	schemaRetrySection := ""
+	if strings.TrimSpace(job.SchemaRetryHint) != "" {
+		schemaRetrySection = fmt.Sprintf("CORRECTION REQUIRED: Your previous response failed schema validation: %s\nRespond with valid JSON matching the required schema.\n\n", job.SchemaRetryHint)
 	}
 	if strings.TrimSpace(job.SprintContractRef) != "" {
 		if data, err := os.ReadFile(job.SprintContractRef); err == nil {
@@ -396,7 +409,7 @@ When dispatching a worker, structure task_text so the worker can parse intent an
 
 %s
 
-%s%sCurrent job state:
+%s%s%sCurrent job state:
 %s
 
 Sprint contract:
@@ -404,7 +417,7 @@ Sprint contract:
 If the supervisor directive section is present, follow it with highest priority.
 Supervisor directives override previous plans.
 
-`, job.Goal, pipelineMode, strings.Join(completionRules, "\n"), invariantsSection, supervisorSection, payload, contractPayload))
+`, job.Goal, pipelineMode, strings.Join(completionRules, "\n"), invariantsSection, supervisorSection, schemaRetrySection, payload, contractPayload))
 }
 
 // autoContextMode selects a context mode based on step count thresholds.
@@ -801,6 +814,12 @@ func buildWorkerPrompt(job domain.Job, task domain.LeaderOutput) string {
 			contractPayload = string(data)
 		}
 	}
+	// schemaRetrySection is injected when a previous attempt produced an
+	// invalid response so the model knows exactly what to correct.
+	schemaRetrySection := ""
+	if strings.TrimSpace(job.SchemaRetryHint) != "" {
+		schemaRetrySection = fmt.Sprintf("\nCORRECTION REQUIRED: Your previous response failed schema validation: %s\nRespond with valid JSON matching the required schema.\n", job.SchemaRetryHint)
+	}
 	// Worker prompts are role-specific even though they share one transport.
 	// This keeps the director broad while making reviewer behavior
 	// explicit and testable instead of relying on task_text phrasing alone.
@@ -815,7 +834,7 @@ TASK: You are a reviewer component assigned by the director. You are not the pri
 The assigned %s task below is complete and ready to execute. Do it now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 status MUST be one of: success, failed, blocked.
-
+%s
 Overall job goal: %s
 
 Task objective:
@@ -848,14 +867,14 @@ Job state:
 
 Verification contract:
 %s
-`, reviewerLabel, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, reviewerLabel, string(taskPayload), buildCompactReviewerPayload(job, task), contractPayload))
+`, reviewerLabel, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, reviewerLabel, string(taskPayload), buildCompactReviewerPayload(job, task), contractPayload))
 	}
 	return strings.TrimSpace(fmt.Sprintf(`
 TASK: You are an executor worker assigned by the director. You perform the task described below. Report results accurately including files changed, commands run, and any errors encountered.
 The assigned task below is complete and ready to execute. Do it now -- do not ask for input.
 Output only a JSON object matching the schema. No conversation, no preamble.
 status MUST be one of: success, failed, blocked.
-
+%s
 Overall job goal: %s
 
 Task objective:
@@ -885,7 +904,7 @@ File management rules:
 
 Job state:
 %s
-`, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), buildCompactExecutorPayload(job, task)))
+`, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel), string(taskPayload), buildCompactExecutorPayload(job, task)))
 }
 
 func profilePrompt(role domain.RoleName, job domain.Job) string {

@@ -32,6 +32,10 @@ const (
 	providerRetryBaseDelay = 250 * time.Millisecond
 	recoveryConcurrency    = 2
 	maxResumeExtraSteps    = 20
+	// schemaRetryMax is the maximum number of additional provider calls made
+	// when JSON parsing or schema validation fails. The total attempt count
+	// is schemaRetryMax+1 (initial call + up to schemaRetryMax retries).
+	schemaRetryMax = 2
 )
 
 // EventNotification carries a job state change that the MCP server can relay
@@ -1242,12 +1246,33 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (result *domain.
 		s.accumulateTokenUsage(job, job.CurrentStep, estimateProviderUsage(*job, domain.RoleDirector, rawLeader, *job))
 		job.SupervisorDirective = ""
 
+		// schemaRetry: retry up to schemaRetryMax times when JSON/schema
+		// validation fails. The hint is injected into the next prompt so the
+		// model can self-correct without counting as a new step.
 		var leader domain.LeaderOutput
-		if err := json.Unmarshal([]byte(rawLeader), &leader); err != nil {
-			return s.failJob(ctx, job, fmt.Sprintf("invalid leader json: %v", err))
-		}
-		if err := schema.ValidateLeaderOutput(leader); err != nil {
-			return s.failJob(ctx, job, fmt.Sprintf("leader schema validation failed: %v", err))
+		for schemaAttempt := 0; ; schemaAttempt++ {
+			parseErr := json.Unmarshal([]byte(rawLeader), &leader)
+			if parseErr == nil {
+				parseErr = schema.ValidateLeaderOutput(leader)
+			}
+			if parseErr == nil {
+				job.SchemaRetryHint = ""
+				break
+			}
+			if schemaAttempt >= schemaRetryMax {
+				job.SchemaRetryHint = ""
+				return s.failJob(ctx, job, fmt.Sprintf("leader schema validation failed after %d attempts: %v", schemaRetryMax+1, parseErr))
+			}
+			hint := parseErr.Error()
+			s.addEvent(job, "schema_retry", fmt.Sprintf("leader schema retry %d/%d: %s", schemaAttempt+1, schemaRetryMax, hint))
+			job.SchemaRetryHint = hint
+			rawLeader, _, err = s.executeProviderPhase(ctx, job, "leader", func() (string, error) {
+				return s.sessions.RunLeader(ctx, *job)
+			})
+			if err != nil {
+				job.SchemaRetryHint = ""
+				return s.failJob(ctx, job, fmt.Sprintf("leader schema retry failed: %v", err))
+			}
 		}
 
 		if leader.Action == "summarize" {
@@ -1416,32 +1441,53 @@ func (s *Service) runWorkerStep(ctx context.Context, job *domain.Job, leader dom
 	}
 	s.accumulateTokenUsage(job, step.Index, estimateProviderUsage(*job, domain.RoleForTaskType(task.TaskType), rawWorker, *job, task))
 
+	// schemaRetry: retry up to schemaRetryMax times when JSON/schema
+	// validation fails. The hint is injected into the next prompt so the
+	// model can self-correct without counting as a new step.
 	var worker domain.WorkerOutput
-	if err := json.Unmarshal([]byte(rawWorker), &worker); err != nil {
-		last := &job.Steps[len(job.Steps)-1]
-		reason := fmt.Sprintf("invalid worker json: %v", err)
-		structuredReason := classifyWorkerFailure(err, rawWorker)
-		last.Status = domain.StepStatusFailed
-		last.ErrorReason = reason
-		last.StructuredReason = structuredReason
-		last.Summary = reason
-		last.FinishedAt = time.Now().UTC()
-		s.addEvent(job, "worker_failed", formatWorkerFailureEventMessage(reason, structuredReason))
-		_, failErr := s.failJob(ctx, job, reason)
-		return failErr
-	}
-	if err := schema.ValidateWorkerOutput(worker); err != nil {
-		last := &job.Steps[len(job.Steps)-1]
-		reason := fmt.Sprintf("worker schema validation failed: %v", err)
-		structuredReason := classifyWorkerFailure(err, rawWorker)
-		last.Status = domain.StepStatusFailed
-		last.ErrorReason = reason
-		last.StructuredReason = structuredReason
-		last.Summary = reason
-		last.FinishedAt = time.Now().UTC()
-		s.addEvent(job, "worker_failed", formatWorkerFailureEventMessage(reason, structuredReason))
-		_, failErr := s.failJob(ctx, job, reason)
-		return failErr
+	for schemaAttempt := 0; ; schemaAttempt++ {
+		parseErr := json.Unmarshal([]byte(rawWorker), &worker)
+		if parseErr == nil {
+			parseErr = schema.ValidateWorkerOutput(worker)
+		}
+		if parseErr == nil {
+			job.SchemaRetryHint = ""
+			break
+		}
+		if schemaAttempt >= schemaRetryMax {
+			job.SchemaRetryHint = ""
+			last := &job.Steps[len(job.Steps)-1]
+			reason := fmt.Sprintf("worker schema validation failed after %d attempts: %v", schemaRetryMax+1, parseErr)
+			structuredReason := classifyWorkerFailure(parseErr, rawWorker)
+			last.Status = domain.StepStatusFailed
+			last.ErrorReason = reason
+			last.StructuredReason = structuredReason
+			last.Summary = reason
+			last.FinishedAt = time.Now().UTC()
+			s.addEvent(job, "worker_failed", formatWorkerFailureEventMessage(reason, structuredReason))
+			_, failErr := s.failJob(ctx, job, reason)
+			return failErr
+		}
+		hint := parseErr.Error()
+		s.addEvent(job, "schema_retry", fmt.Sprintf("worker schema retry %d/%d: %s", schemaAttempt+1, schemaRetryMax, hint))
+		job.SchemaRetryHint = hint
+		rawWorker, _, err = s.executeProviderPhase(ctx, job, "worker", func() (string, error) {
+			return s.sessions.RunWorker(ctx, *job, task)
+		})
+		if err != nil {
+			job.SchemaRetryHint = ""
+			last := &job.Steps[len(job.Steps)-1]
+			reason := fmt.Sprintf("worker schema retry failed: %v", err)
+			structuredReason := classifyWorkerFailure(err, "")
+			last.Status = domain.StepStatusFailed
+			last.ErrorReason = reason
+			last.StructuredReason = structuredReason
+			last.Summary = reason
+			last.FinishedAt = time.Now().UTC()
+			s.addEvent(job, "worker_failed", formatWorkerFailureEventMessage(reason, structuredReason))
+			_, failErr := s.failJob(ctx, job, reason)
+			return failErr
+		}
 	}
 
 	artifactPaths, err := s.artifacts.MaterializeWorkerArtifacts(job.ID, step.Index, worker)

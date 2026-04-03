@@ -19,6 +19,28 @@
     "role_overrides": {}
   },
 
+  "mini (budget)": {
+    "_description": "All gpt-5.4-mini. Low cost, decent quality.",
+    "provider": "codex",
+    "pipeline_mode": "light",
+    "role_overrides": {
+      "director": {"model": "gpt-5.4-mini"},
+      "executor": {"model": "gpt-5.4-mini"},
+      "evaluator": {"model": "gpt-5.4-mini"}
+    }
+  },
+
+  "spark (ultra-fast)": {
+    "_description": "All gpt-5.3-codex-spark. Near-instant coding, lowest latency. Pro subscription required.",
+    "provider": "codex",
+    "pipeline_mode": "light",
+    "role_overrides": {
+      "director": {"model": "gpt-5.3-codex-spark"},
+      "executor": {"model": "gpt-5.3-codex-spark"},
+      "evaluator": {"model": "gpt-5.3-codex-spark"}
+    }
+  },
+
   "claude-only": {
     "_description": "All Claude. Director/evaluator use Opus, executor/reviewer use Sonnet.",
     "provider": "claude",
