@@ -989,10 +989,30 @@ File management rules:
 - If working in parallel with another worker, only touch your assigned files
 - Use actual shell commands to create files (e.g. echo, touch, write commands)
 
+Self-check before reporting success:
+- Run: %s
+- Run: %s
+- Fix any build errors or test failures yourself before reporting.
+- Only report status "success" after both commands pass.
+
 Job state:
 %s
-`, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel, job.AmbitionText), string(taskPayload), buildCompactExecutorPayload(job, task)))
+`, schemaRetrySection, job.Goal, taskContext.Objective, taskContext.Why, invariantsSection, taskContext.ScopeBoundary, ambitionInstruction(job.AmbitionLevel, job.AmbitionText), string(taskPayload), engineBuildCmd(job), engineTestCmd(job), buildCompactExecutorPayload(job, task)))
 	return applyPromptOverrides(executorBase, "executor", job.WorkspaceDir, job.PromptOverrides)
+}
+
+func engineBuildCmd(job domain.Job) string {
+	if cmd := strings.TrimSpace(job.EngineBuildCmd); cmd != "" {
+		return cmd
+	}
+	return "go build ./..."
+}
+
+func engineTestCmd(job domain.Job) string {
+	if cmd := strings.TrimSpace(job.EngineTestCmd); cmd != "" {
+		return cmd
+	}
+	return "go test ./..."
 }
 
 func profilePrompt(role domain.RoleName, job domain.Job) string {
