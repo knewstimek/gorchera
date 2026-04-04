@@ -233,6 +233,33 @@ Common examples by language:
 - Both commands are independent; you can override only one (e.g. set `engine_test_cmd` only).
 - Works with `gorchera_start_job` and per-goal in `gorchera_start_chain`.
 
+## Dashboard
+
+The web dashboard is embedded in the binary. Start it pointing at any workspace:
+
+```bash
+gorchera serve -workspace D:\path\to\project
+# http://127.0.0.1:8080/dashboard/
+```
+
+Stop gracefully (no taskkill needed):
+
+```bash
+gorchera stop -workspace D:\path\to\project
+# or by address
+gorchera stop -addr 127.0.0.1:8080
+```
+
+Switch the workspace at runtime without restarting:
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/workspace \
+  -d '{"workspace":"D:\\path\\to\\other-project"}'
+# GET /admin/workspace to confirm current workspace
+```
+
+The MCP process (cwd = workspace) and serve must target the same workspace directory -- job data is stored under `<workspace>/.gorchera/`. Use `-workspace` to point serve at the right directory regardless of where it is launched.
+
 ## Operational Tips
 
 - **Never cancel a job because status looks stuck.** Planner/executor can take 5-10 minutes. Check process list or worktree diff instead.

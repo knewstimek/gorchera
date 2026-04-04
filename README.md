@@ -37,6 +37,31 @@ go run ./cmd/gorchera run -goal "Add a hello function" -provider codex
 go run ./cmd/gorchera status -all
 ```
 
+## Dashboard
+
+The web dashboard is embedded in the binary -- no extra files needed.
+
+```bash
+# Start the API server (defaults to 127.0.0.1:8080)
+gorchera serve -workspace D:\path\to\project
+
+# Open in browser
+# http://127.0.0.1:8080/dashboard/
+
+# Stop gracefully
+gorchera stop -workspace D:\path\to\project
+# or by address if workspace is unknown
+gorchera stop -addr 127.0.0.1:8080
+```
+
+The serve process writes `.gorchera/serve.pid` (PID + address) on startup and removes it on exit.
+Runtime workspace switch (without restart):
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/workspace \
+  -d '{"workspace":"D:\\path\\to\\other-project"}'
+```
+
 ## Pipeline Modes
 
 Gorchera supports three pipeline modes to balance quality vs cost:
