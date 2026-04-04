@@ -5,36 +5,36 @@ import "testing"
 func TestParseServeOptionsDefaultsRecoveryOff(t *testing.T) {
 	t.Parallel()
 
-	addr, opts, err := parseServeOptions(nil)
+	sopts, err := parseServeOptions(nil)
 	if err != nil {
 		t.Fatalf("parseServeOptions returned error: %v", err)
 	}
-	if addr != "127.0.0.1:8080" {
-		t.Fatalf("addr = %q, want default listen address", addr)
+	if sopts.addr != "127.0.0.1:8080" {
+		t.Fatalf("addr = %q, want default listen address", sopts.addr)
 	}
-	if opts.enabled {
+	if sopts.recover.enabled {
 		t.Fatal("expected startup recovery to default off for serve")
 	}
-	if len(opts.jobIDs) != 0 {
-		t.Fatalf("expected no selected job IDs, got %#v", opts.jobIDs)
+	if len(sopts.recover.jobIDs) != 0 {
+		t.Fatalf("expected no selected job IDs, got %#v", sopts.recover.jobIDs)
 	}
 }
 
 func TestParseServeOptionsEnablesSelectedRecovery(t *testing.T) {
 	t.Parallel()
 
-	addr, opts, err := parseServeOptions([]string{"-addr", "127.0.0.1:9090", "-recover-jobs", "job-a, job-b"})
+	sopts, err := parseServeOptions([]string{"-addr", "127.0.0.1:9090", "-recover-jobs", "job-a, job-b"})
 	if err != nil {
 		t.Fatalf("parseServeOptions returned error: %v", err)
 	}
-	if addr != "127.0.0.1:9090" {
-		t.Fatalf("addr = %q, want overridden listen address", addr)
+	if sopts.addr != "127.0.0.1:9090" {
+		t.Fatalf("addr = %q, want overridden listen address", sopts.addr)
 	}
-	if !opts.enabled {
+	if !sopts.recover.enabled {
 		t.Fatal("expected startup recovery enabled when recover-jobs is set")
 	}
-	if len(opts.jobIDs) != 2 || opts.jobIDs[0] != "job-a" || opts.jobIDs[1] != "job-b" {
-		t.Fatalf("unexpected selected job IDs: %#v", opts.jobIDs)
+	if len(sopts.recover.jobIDs) != 2 || sopts.recover.jobIDs[0] != "job-a" || sopts.recover.jobIDs[1] != "job-b" {
+		t.Fatalf("unexpected selected job IDs: %#v", sopts.recover.jobIDs)
 	}
 }
 

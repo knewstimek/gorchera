@@ -1,5 +1,13 @@
 # Changelog
 
+## v2026.04.04.3
+
+### Added
+- **Serve workspace flag**: `gorchera serve -workspace DIR` starts the API server targeting a specific workspace regardless of cwd. Solves the dashboard-sees-wrong-jobs problem when serve runs from a different directory than the MCP process.
+- **Runtime workspace switch**: `POST /admin/workspace {"workspace":"..."}` hot-swaps the serve process to a different workspace without restart. `GET /admin/workspace` returns the current workspace.
+- **Graceful shutdown**: `gorchera stop [-workspace DIR | -addr HOST:PORT]` sends a shutdown request to a running serve. Serve writes a PID file (`.gorchera/serve.pid`) on startup and cleans it up on exit. Signal handling (Ctrl+C) also triggers graceful shutdown.
+- **Root redirect**: `GET /` redirects to `/dashboard/` instead of returning 404.
+
 ## v2026.04.04.2
 
 > **CRITICAL HOTFIX** -- The evaluator feedback loop (the core quality gate of the harness) was non-functional since v2026.04.04.1. Jobs could pass with known defects. All users should upgrade immediately.

@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
 	"strings"
 	"time"
 
@@ -31,19 +33,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	rootDir := filepath.Join(".", ".gorchera")
 	workspaceRoot, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	stateStore := store.NewStateStore(filepath.Join(rootDir, "state"))
-	artifactStore := store.NewArtifactStore(filepath.Join(rootDir, "artifacts"))
-
-	registry := provider.NewRegistry()
-	registry.Register(mock.New())
-
-	sessionManager := provider.NewSessionManager(registry)
-	service := orchestrator.NewService(sessionManager, stateStore, artifactStore, workspaceRoot)
+	service := buildService(workspaceRoot)
 
 	ctx := context.Background()
 
@@ -88,6 +82,8 @@ func main() {
 		stream(os.Args[2:])
 	case "serve":
 		serve(service, os.Args[2:])
+	case "stop":
+		stop(os.Args[2:])
 	case "mcp":
 		runMCP(service, os.Args[2:])
 	default:
@@ -101,19 +97,30 @@ type startupRecoverOptions struct {
 	jobIDs  []string
 }
 
-func parseServeOptions(args []string) (string, startupRecoverOptions, error) {
+type serveOptions struct {
+	addr      string
+	workspace string
+	recover   startupRecoverOptions
+}
+
+func parseServeOptions(args []string) (serveOptions, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", "127.0.0.1:8080", "listen address")
+	workspace := fs.String("workspace", "", "workspace directory (defaults to cwd)")
 	recover := fs.Bool("recover", false, "recover interrupted jobs on startup")
 	recoverJobs := fs.String("recover-jobs", "", "comma-separated job IDs to recover on startup")
 	if err := fs.Parse(args); err != nil {
-		return "", startupRecoverOptions{}, err
+		return serveOptions{}, err
 	}
 	jobIDs := splitCSV(*recoverJobs)
-	return *addr, startupRecoverOptions{
-		enabled: *recover || len(jobIDs) > 0,
-		jobIDs:  jobIDs,
+	return serveOptions{
+		addr:      *addr,
+		workspace: *workspace,
+		recover: startupRecoverOptions{
+			enabled: *recover || len(jobIDs) > 0,
+			jobIDs:  jobIDs,
+		},
 	}, nil
 }
 
@@ -575,16 +582,104 @@ func stream(args []string) {
 }
 
 func serve(service *orchestrator.Service, args []string) {
-	addr, recoverOpts, err := parseServeOptions(args)
+	opts, err := parseServeOptions(args)
 	if err != nil {
 		log.Fatal(err)
 	}
-	applyStartupRecovery(service, recoverOpts)
-	defer service.Shutdown()
 
-	server := api.NewServer(service)
-	fmt.Printf("gorchera API listening on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, server.Handler()))
+	workspace := opts.workspace
+	if workspace != "" {
+		service = buildService(workspace)
+	} else {
+		workspace, _ = os.Getwd()
+	}
+	applyStartupRecovery(service, opts.recover)
+
+	shutdownCh := make(chan struct{}, 1)
+
+	// swappable handler for runtime workspace switch
+	handler := &swappableHandler{current: api.NewServer(service).Handler()}
+	var svcMu sync.Mutex
+	currentService := service
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/", http.StatusFound)
+	})
+	mux.Handle("/", handler)
+	mux.HandleFunc("POST /admin/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"status":"shutting_down"}`)
+		select {
+		case shutdownCh <- struct{}{}:
+		default:
+		}
+	})
+	mux.HandleFunc("POST /admin/workspace", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Workspace string `json:"workspace"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Workspace == "" {
+			http.Error(w, `{"error":"workspace required"}`, http.StatusBadRequest)
+			return
+		}
+		info, statErr := os.Stat(req.Workspace)
+		if statErr != nil || !info.IsDir() {
+			http.Error(w, `{"error":"workspace directory not found"}`, http.StatusBadRequest)
+			return
+		}
+
+		svcMu.Lock()
+		newSvc := buildService(req.Workspace)
+		oldSvc := currentService
+		currentService = newSvc
+		handler.swap(api.NewServer(newSvc).Handler())
+		svcMu.Unlock()
+
+		oldSvc.Shutdown()
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "{\"status\":\"switched\",\"workspace\":%q}\n", req.Workspace)
+		log.Printf("workspace switched to %s", req.Workspace)
+	})
+	mux.HandleFunc("GET /admin/workspace", func(w http.ResponseWriter, r *http.Request) {
+		svcMu.Lock()
+		ws := currentService.WorkspaceRoot()
+		svcMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "{\"workspace\":%q}\n", ws)
+	})
+
+	srv := &http.Server{Addr: opts.addr, Handler: mux}
+
+	// PID file
+	pidFile := filepath.Join(workspace, ".gorchera", "serve.pid")
+	writePIDFile(pidFile, os.Getpid(), opts.addr)
+	defer removePIDFile(pidFile)
+
+	// graceful shutdown on signal or admin request
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+
+	go func() {
+		select {
+		case <-sigCh:
+		case <-shutdownCh:
+		}
+		log.Println("gorchera serve shutting down...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}()
+
+	fmt.Printf("gorchera API listening on %s (workspace: %s)\n", opts.addr, workspace)
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+
+	svcMu.Lock()
+	currentService.Shutdown()
+	svcMu.Unlock()
 }
 
 func runMCP(service *orchestrator.Service, args []string) {
@@ -626,7 +721,9 @@ func printJSON(v any) {
 }
 
 func usage() {
-	fmt.Println("gorchera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|mcp> [flags]")
+	fmt.Println("gorchera <run|status|events|artifacts|verification|planning|evaluator|profile|resume|approve|retry|cancel|reject|harness-start|harness-view|harness-list|harness-status|harness-stop|stream|serve|stop|mcp> [flags]")
+	fmt.Println("  serve [-workspace DIR] [-addr HOST:PORT] -- API server with graceful shutdown")
+	fmt.Println("  stop [-workspace DIR | -addr HOST:PORT] -- graceful shutdown of running serve")
 	fmt.Println("  serve/mcp block stale interrupted jobs by default; use -recover or -recover-jobs job1,job2 to resume explicitly.")
 	fmt.Println("  run accepts -workspace-mode shared|isolated; isolated creates a detached git worktree for the job.")
 }
@@ -662,4 +759,92 @@ func flattenArtifacts(steps []domain.Step) []string {
 		out = append(out, step.Artifacts...)
 	}
 	return out
+}
+
+func buildService(workspace string) *orchestrator.Service {
+	rootDir := filepath.Join(workspace, ".gorchera")
+	stateStore := store.NewStateStore(filepath.Join(rootDir, "state"))
+	artifactStore := store.NewArtifactStore(filepath.Join(rootDir, "artifacts"))
+	registry := provider.NewRegistry()
+	registry.Register(mock.New())
+	sessionManager := provider.NewSessionManager(registry)
+	return orchestrator.NewService(sessionManager, stateStore, artifactStore, workspace)
+}
+
+// swappableHandler allows hot-swapping the underlying http.Handler (for workspace switch).
+type swappableHandler struct {
+	mu      sync.RWMutex
+	current http.Handler
+}
+
+func (h *swappableHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	handler := h.current
+	h.mu.RUnlock()
+	handler.ServeHTTP(w, r)
+}
+
+func (h *swappableHandler) swap(next http.Handler) {
+	h.mu.Lock()
+	h.current = next
+	h.mu.Unlock()
+}
+
+type pidInfo struct {
+	PID  int    `json:"pid"`
+	Addr string `json:"addr"`
+}
+
+func writePIDFile(path string, pid int, addr string) {
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	data, _ := json.Marshal(pidInfo{PID: pid, Addr: addr})
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Printf("warning: failed to write pid file: %v", err)
+	}
+}
+
+func removePIDFile(path string) {
+	os.Remove(path)
+}
+
+func stop(args []string) {
+	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+	workspace := fs.String("workspace", "", "workspace directory (defaults to cwd)")
+	addr := fs.String("addr", "", "serve address (overrides pid file lookup)")
+	fs.Parse(args)
+
+	if *addr != "" {
+		sendShutdown(*addr)
+		return
+	}
+
+	ws := *workspace
+	if ws == "" {
+		ws, _ = os.Getwd()
+	}
+
+	pidFile := filepath.Join(ws, ".gorchera", "serve.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		log.Fatalf("no running serve found (pid file: %s): %v", pidFile, err)
+	}
+
+	var info pidInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		log.Fatalf("corrupt pid file: %v", err)
+	}
+
+	sendShutdown(info.Addr)
+	fmt.Printf("shutdown requested (pid %d, addr %s)\n", info.PID, info.Addr)
+}
+
+func sendShutdown(addr string) {
+	resp, err := http.Post("http://"+addr+"/admin/shutdown", "application/json", nil)
+	if err != nil {
+		log.Fatalf("failed to contact serve at %s: %v", addr, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("shutdown request failed: %s", resp.Status)
+	}
 }

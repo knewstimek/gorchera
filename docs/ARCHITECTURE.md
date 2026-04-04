@@ -89,6 +89,9 @@ Notes:
 - `InterruptRecoverableJobs()` only blocks stale recoverable jobs whose lease heartbeat has expired; fresh in-flight jobs are left alone.
 - `Shutdown()` cancels background work, waits for in-flight goroutines to exit, and then blocks any still-owned recoverable jobs with an interruption reason.
 - `gorchera serve` and `gorchera mcp` both run the stale-job sweep on startup before serving requests; one-shot CLI commands do not mutate job state just to inspect it.
+- `gorchera serve -workspace DIR` targets a specific workspace's data regardless of cwd.
+- `POST /admin/workspace` hot-swaps the serve process to a different workspace at runtime.
+- `gorchera serve` writes `.gorchera/serve.pid` (JSON: pid + addr) and removes it on shutdown. `gorchera stop` reads this file to send a graceful shutdown request.
 - MCP terminal notifications are buffered until stdio output is ready, and startup wiring registers the callback only after the recovery sweep completes.
 
 ## Workspace Modes

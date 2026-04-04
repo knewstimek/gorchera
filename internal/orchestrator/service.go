@@ -143,6 +143,9 @@ func NewService(sessions *provider.SessionManager, state *store.StateStore, arti
 	}
 }
 
+// WorkspaceRoot returns the workspace directory this service operates on.
+func (s *Service) WorkspaceRoot() string { return s.workspaceRoot }
+
 // Shutdown cancels the service-level context, signals background job
 // goroutines to stop, and waits for them to exit. It is safe to call multiple
 // times.
