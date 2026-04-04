@@ -122,7 +122,7 @@ All strictness levels default to FAIL if requirements are not met.
 | `normal` | All changed files; domain standards apply |
 | `strict` | Adversarial reviewer; senior engineer bar; 3-input trace; test expectations validated |
 
-Strictness applies to any domain -- novel writing, reverse engineering, data pipelines, etc. The code-specific parts (build/test gates, fuzz/bench requirements) can be suppressed or replaced via `prompt_overrides.evaluator` when working in a non-code domain. For non-code projects, set `engine_build_cmd` and `engine_test_cmd` to empty strings to disable executor self-check and engine verification.
+Strictness applies to any domain -- novel writing, reverse engineering, data pipelines, etc. The code-specific parts (build/test gates, fuzz/bench requirements) can be suppressed or replaced via `prompt_overrides.evaluator` when working in a non-code domain. For non-code projects, set `engine_build_cmd` and `engine_test_cmd` to a no-op command (e.g. `true`) to skip build/test verification.
 
 ## Ambition Levels
 
