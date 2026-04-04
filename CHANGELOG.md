@@ -2,9 +2,11 @@
 
 ## v2026.04.04.2
 
+> **CRITICAL HOTFIX** -- The evaluator feedback loop (the core quality gate of the harness) was non-functional since v2026.04.04.1. Jobs could pass with known defects. All users should upgrade immediately.
+
 ### Fixed
-- **Evaluator gate bypass (structural)**: `mergeEvaluatorReport` had `if rulePassed { providerPassed = true }` which overrode the LLM evaluator's judgment when mechanical checks (build/test/steps) passed. Evaluator could find DEFECT but job still passed. Removed the override -- both rule-based and provider verdicts must independently agree.
-- **Automated checks not enforced**: `PreCheckResults` (grep/file_exists/file_unchanged/no_new_deps) were only informational context for the LLM evaluator, not a mechanical gate. A failed grep check could be ignored if the provider returned passed=true. Now any failed automated check mechanically blocks the report regardless of provider/rule verdicts.
+- **Evaluator gate bypass (CRITICAL)**: `mergeEvaluatorReport` had `if rulePassed { providerPassed = true }` which silently discarded the LLM evaluator's judgment whenever build/test/steps passed mechanically. The evaluator could find concrete DEFECT findings, return `passed: false`, and the merge logic would override it to `true`. This meant the evaluator retry loop -- the central quality mechanism -- was effectively dead code. Removed the override; both rule-based and provider verdicts must now independently agree.
+- **Automated checks not enforced (CRITICAL)**: `PreCheckResults` (grep/file_exists/file_unchanged/no_new_deps) were only informational context for the LLM evaluator, not a mechanical gate. A failed grep check could not block a job regardless of the result. Now any failed automated check mechanically blocks the report as a final demote-only gate.
 
 ## v2026.04.04.1
 
