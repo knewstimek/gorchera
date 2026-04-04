@@ -482,7 +482,7 @@ func toolList() []toolDef {
 	return []toolDef{
 		{
 			Name:        "gorchera_start_job",
-			Description: "Start a new Gorchera job. Pipeline: director -> executor -> [engine build/test] -> reviewer(balanced/full) -> evaluator. Use pipeline_mode to control overhead.",
+			Description: "Start a new Gorchera job. Pipeline: director -> executor -> [engine build/test] -> evaluator (code review + gate). pipeline_mode controls evaluator depth (light/balanced/full).",
 			InputSchema: toolInputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
@@ -491,7 +491,7 @@ func toolList() []toolDef {
 					"workspace_dir":    {Type: "string", Description: "Absolute path of the workspace directory"},
 					"workspace_mode":   {Type: "string", Description: "Workspace mode: shared | isolated. isolated creates a detached git worktree rooted at HEAD for the job.", Default: "shared"},
 					"max_steps":        {Type: "integer", Description: "Maximum leader steps", Default: 8},
-					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light (default, skip reviewer) | balanced (add reviewer) | full (fix loops + parallel workers)", Default: "light", Enum: []string{"light", "balanced", "full"}},
+					"pipeline_mode":    {Type: "string", Description: "Pipeline mode: light (QUICK eval) | balanced (THOROUGH eval, default) | full (EXHAUSTIVE eval). Controls evaluator verification depth. All modes include evaluator code review and fix loop.", Default: "balanced", Enum: []string{"light", "balanced", "full"}},
 					"strictness_level": {Type: "string", Description: "Evaluator strictness: strict | normal | lenient", Default: "normal"},
 					"ambition_level":   {Type: "string", Description: "Worker autonomy scope: low | medium | high | custom", Default: "medium", Enum: []string{"low", "medium", "high", "custom"}},
 					"ambition_text":    {Type: "string", Description: "Custom ambition text. With custom level: replaces default. With low/medium/high: prepended to default. See SUPERVISOR_GUIDE.md for defaults."},
@@ -506,7 +506,7 @@ func toolList() []toolDef {
 					"engine_test_cmd":  {Type: "string", Description: "Override engine test command (default: go test ./...). Parsed by spaces; e.g. npm test or make test."},
 					"prompt_overrides": {
 						Type:        "object",
-						Description: "Per-role prompt overrides (prepend to default prompt). Keys: director, executor, evaluator, reviewer. Values: additional instructions prepended to the role's system prompt. Replace mode is not available via job parameters (use .gorchera/prompts/{role}.md with # REPLACE for that).",
+						Description: "Per-role prompt overrides (prepend to default prompt). Keys: director, executor, evaluator. Values: additional instructions prepended to the role's system prompt. Replace mode is not available via job parameters (use .gorchera/prompts/{role}.md with # REPLACE for that).",
 					},
 				},
 				Required: []string{"goal"},
@@ -857,7 +857,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	workspaceDir := stringArg(args, "workspace_dir")
 	workspaceMode := stringArgDefault(args, "workspace_mode", string(domain.WorkspaceModeShared))
 	maxSteps := intArgDefault(args, "max_steps", 8)
-	pipelineMode := stringArgDefault(args, "pipeline_mode", "light")
+	pipelineMode := stringArgDefault(args, "pipeline_mode", "balanced")
 	strictnessLevel := stringArgDefault(args, "strictness_level", "normal")
 	ambitionLevel := stringArgDefault(args, "ambition_level", domain.AmbitionLevelMedium)
 	ambitionText := stringArg(args, "ambition_text")

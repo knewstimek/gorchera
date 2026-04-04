@@ -908,7 +908,7 @@ func TestClaudeAdapterBuildsCLIArgsAndModelFlagForRoleProfiles(t *testing.T) {
 				return adapter.RunEvaluator(context.Background(), job)
 			},
 			wantModel:  "sonnet",
-			wantPrompt: "evaluator component",
+			wantPrompt: "evaluator for an orchestrator-managed job",
 		},
 		{
 			name: "worker",
@@ -1193,7 +1193,7 @@ func TestPlannerAndEvaluatorPromptsIncludeVerificationContract(t *testing.T) {
 	if !strings.Contains(evaluatorPrompt, "Verification contract") {
 		t.Fatal("expected evaluator prompt to include verification contract payload")
 	}
-	if !strings.Contains(evaluatorPrompt, "Do NOT pass the job merely because one implement step succeeded.") {
+	if !strings.Contains(evaluatorPrompt, "Do NOT pass merely because a worker reported success") {
 		t.Fatal("expected evaluator prompt to enforce gate-based completion")
 	}
 	workerPrompt := buildWorkerPrompt(job, domain.LeaderOutput{

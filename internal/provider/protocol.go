@@ -344,44 +344,36 @@ func buildEvaluatorPrompt(job domain.Job) string {
 	}
 
 	base := strings.TrimSpace(fmt.Sprintf(`
-TASK: You are an evaluator component operating under an orchestrator supervisor. The supervisor monitors completion outcomes, and the director plus workers provide the execution evidence you must assess. You verify results against the verification contract and report pass/fail/blocked decisions without performing implementation yourself.
-The job data below is complete. Evaluate it now -- do not ask for more input.
-Output only a JSON object matching the schema. No conversation, no preamble.
+TASK: You are an evaluator for an orchestrator-managed job. You verify results against the verification contract and report pass/fail/blocked. You do not implement anything yourself.
+The job data below is complete. Evaluate it now. Output only a JSON object matching the schema.
 
-EVALUATION ROLE:
+ROLE:
 - You are a release gate, not a cheerleader.
-- Do NOT pass the job merely because one implement step succeeded.
-- Base your decision on acceptance criteria, verification contract evidence, step outcomes, and whether the goal is actually satisfied.
+- Do NOT pass merely because a worker reported success or one implement step succeeded.
+- %s
 - %s
 
 Job goal: %s
 
-EVALUATION PROCEDURE:
-1. Inspect the verification contract, job summary, director context, and full steps array.
-2. Confirm whether the required evidence exists and whether the completed steps actually satisfy the goal.
-3. Treat failed or blocked execution evidence as a gate failure unless the evidence clearly shows the issue is unrelated to the requested outcome.
-4. Use status="passed" only when the contract is satisfied, the goal is achieved, and there is no material unresolved contradiction in the evidence.
-5. Use status="failed" when the evidence shows missing coverage, unmet acceptance criteria, regressions, or unresolved failed/blocked work.
-6. Use status="blocked" only when the available evidence is genuinely insufficient or ambiguous even after reading the job state.
-7. Prefer concrete missing_step_types and evidence over vague reasons.
-
-VERIFICATION PROCEDURE (mandatory -- do not skip any step):
-1. The job state below includes diff_summary and error_reason for each step. Use these to understand what changed and what failed.
-2. Open and read the artifact files listed in each step to inspect detailed engine build/test results and worker outputs. Do NOT rely solely on step summaries.
-3. Read the actual source files that were changed (use diff_summary to identify them) and verify they satisfy the goal.
-4. Check input/output contracts, invariants, edge cases.
-5. Look for lifecycle, restart, retry, recovery, idempotency, and state-transition issues when relevant.
-6. Look for missing validation, hidden regressions, and contradictions between artifacts, summaries, and actual code.
-7. Base your pass/fail decision on what you actually read, not on what the worker claimed.
-
-%s
-%s%s
+PROCEDURE (mandatory -- follow every step in order):
+1. Read diff_summary and error_reason in each step to understand what changed and what failed.
+2. Open and read the artifact files listed in each step. These contain engine build/test results and worker outputs. Do NOT rely solely on step summaries.
+3. Read the actual source files that were changed (use diff_summary to identify filenames) and verify they satisfy the goal.
+4. Check the verification contract below. Confirm each required_check is satisfied by actual evidence you read.
+5. Check input/output contracts, invariants, edge cases, lifecycle/restart/retry/recovery/idempotency issues where relevant.
+6. Look for missing validation, hidden regressions, and contradictions between artifacts and actual code.
+7. Decide:
+   - status="passed": contract satisfied, goal achieved, no material contradiction in evidence you read.
+   - status="failed": missing coverage, unmet criteria, regressions, or unresolved failures. Provide concrete missing_step_types and evidence.
+   - status="blocked": evidence genuinely insufficient even after reading the workspace.
+8. Base your decision on what you actually read, not on what the worker claimed.
+%s%s%s
 Current job state:
 %s
 
 Verification contract:
 %s
-`, ambitionEvaluationGuidance(job.AmbitionLevel, job.AmbitionText), job.Goal, rubricSection, depthGuidance, schemaRetrySection, buildCompactEvaluatorPayload(job), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel, job.AmbitionText), depthGuidance, job.Goal, rubricSection, schemaRetrySection, "", buildCompactEvaluatorPayload(job), contractPayload))
 	return applyPromptOverrides(base, "evaluator", job.WorkspaceDir, job.PromptOverrides)
 }
 
