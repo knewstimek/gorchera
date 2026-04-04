@@ -66,10 +66,11 @@ const (
 )
 
 const (
-	AmbitionLevelLow    = "low"
-	AmbitionLevelMedium = "medium"
-	AmbitionLevelHigh   = "high"
-	AmbitionLevelCustom = "custom"
+	AmbitionLevelLow     = "low"
+	AmbitionLevelMedium  = "medium"
+	AmbitionLevelHigh    = "high"
+	AmbitionLevelExtreme = "extreme"
+	AmbitionLevelCustom  = "custom"
 )
 
 type ExecutionProfile struct {
@@ -189,6 +190,8 @@ func NormalizeAmbitionLevel(level string) string {
 		return AmbitionLevelLow
 	case AmbitionLevelHigh:
 		return AmbitionLevelHigh
+	case AmbitionLevelExtreme:
+		return AmbitionLevelExtreme
 	case AmbitionLevelCustom:
 		return AmbitionLevelCustom
 	default:

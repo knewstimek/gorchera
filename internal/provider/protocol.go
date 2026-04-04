@@ -287,6 +287,8 @@ func ambitionInstruction(level, ambitionText string) string {
 		base = "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task."
 	case domain.AmbitionLevelHigh:
 		base = "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified."
+	case domain.AmbitionLevelExtreme:
+		base = "Build as if this will be open-sourced and reviewed by senior engineers. The goal describes WHAT to build. You decide HOW to build it well. Minimum bar: fuzz testing, benchmarks, explicit edge case handling. Design for extensibility with clean interfaces and no hardcoded assumptions. Handle every edge case including invalid input, boundary conditions, and concurrent access where applicable. Code must be self-documenting with clear naming. If the problem domain has known pitfalls, anticipate and guard against them proactively. Impress with engineering quality not explicitly asked for."
 	case domain.AmbitionLevelCustom:
 		// custom with no text: fall back to medium behavior
 		if strings.TrimSpace(ambitionText) == "" {
@@ -312,6 +314,8 @@ func ambitionEvaluationGuidance(level, ambitionText string) string {
 		base = "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion."
 	case domain.AmbitionLevelHigh:
 		base = "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task."
+	case domain.AmbitionLevelExtreme:
+		base = "Ambition level is extreme. Demand production-grade quality: fuzz tests, benchmarks, extensible design, comprehensive edge case handling. If any of these are missing, fail. Accept and encourage scope expansion that improves engineering quality. A merely functional implementation is not sufficient at this ambition level."
 	case domain.AmbitionLevelCustom:
 		if strings.TrimSpace(ambitionText) == "" {
 			return "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope."
@@ -359,6 +363,42 @@ func buildEvaluatorPrompt(job domain.Job) string {
 		depthGuidance = "Verification depth: THOROUGH. Read all changed files, check edge cases, verify goal alignment. Report concrete issues only."
 	}
 
+	// strictnessGuidance controls how aggressively the evaluator judges.
+	// All levels share the same core rule: default decision is FAIL.
+	// Improvements or defects found = fail. Difference is inspection depth.
+	strictness := strings.TrimSpace(strings.ToLower(job.StrictnessLevel))
+	var strictnessGuidance string
+	switch strictness {
+	case "lenient":
+		strictnessGuidance = `Strictness: LENIENT. Your default decision is FAIL.
+Scope: read key changed files and check for obvious problems.
+- If the most basic domain-standard features are missing, fail. (e.g. a disassembler that cannot decode common instruction forms)
+- If you spot a clear bug or improvement, fail with a specific description.
+- If your reason mentions any defect or missing feature, status MUST be "failed".
+- Pass only when you see nothing obviously wrong or missing for the stated goal.`
+	case "strict":
+		strictnessGuidance = `Strictness: STRICT. You are an adversarial reviewer. Your default decision is FAIL.
+Before deciding:
+1. Pick 3 realistic inputs from the problem domain and mentally trace them through the code. If any produces wrong output, fail.
+2. Check if the code handles COMMON cases of the domain, not just the test suite cases. Missing domain-standard features count as defects.
+3. If tests pass but you can think of an untested scenario that would fail, that is a concrete defect.
+4. Ask: "If a senior engineer in this domain reviewed this, what would they expect that is missing?" Missing expectations are defects.
+5. Ask: "Is this designed for growth?" If the goal implies a library/tool, demand extensible structure, not hardcoded minimums.
+6. "It works" is not enough. It must work WELL. Merely functional but poorly engineered code is grounds for failure.
+Rules:
+- FAIL requires a specific, reproducible example or a concrete missing feature. Vague concerns are not grounds for failure.
+- If your reason describes ANY defect, missing feature, or improvement, status MUST be "failed". A "passed" status with defects in the reason is forbidden.
+- Pass ONLY when you have actively tried to break the code, looked for missing features, and found nothing.`
+	default:
+		strictnessGuidance = `Strictness: NORMAL. Your default decision is FAIL.
+Scope: read all changed files, check edge cases, verify goal alignment.
+- Fail for any concrete, reproducible defect or bug you can point to.
+- Fail if domain-standard features are missing (features a practitioner would expect).
+- Fail if there are obvious structural problems that would block future extension.
+- If your reason describes any defect or improvement, status MUST be "failed".
+- Pass when the implementation is correct, complete for the stated goal, and has no obvious missing features.`
+	}
+
 	// schemaRetrySection is injected when a previous evaluator attempt produced
 	// an invalid response so the model knows exactly what to correct.
 	schemaRetrySection := ""
@@ -373,6 +413,7 @@ The job data below is complete. Evaluate it now. Output only a JSON object match
 ROLE:
 - You are a release gate, not a cheerleader.
 - Do NOT pass merely because a worker reported success or one implement step succeeded.
+- %s
 - %s
 - %s
 
@@ -396,7 +437,7 @@ Current job state:
 
 Verification contract:
 %s
-`, ambitionEvaluationGuidance(job.AmbitionLevel, job.AmbitionText), depthGuidance, job.Goal, rubricSection, schemaRetrySection, "", buildCompactEvaluatorPayload(job), contractPayload))
+`, ambitionEvaluationGuidance(job.AmbitionLevel, job.AmbitionText), depthGuidance, strictnessGuidance, job.Goal, rubricSection, schemaRetrySection, "", buildCompactEvaluatorPayload(job), contractPayload))
 	return applyPromptOverrides(base, "evaluator", job.WorkspaceDir, job.PromptOverrides)
 }
 
