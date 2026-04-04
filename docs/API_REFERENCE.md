@@ -41,9 +41,9 @@ Start a new job. Returns `Job` object immediately; pipeline runs in background.
 | workspace_dir | string | no | - | Absolute path of workspace |
 | workspace_mode | string | no | shared | `shared` \| `isolated` |
 | max_steps | integer | no | 8 | Maximum director steps |
-| pipeline_mode | string | no | light | `light` \| `balanced` \| `full` |
-| strictness_level | string | no | normal | `strict` \| `normal` \| `lenient` |
-| ambition_level | string | no | medium | `low` \| `medium` \| `high` |
+| pipeline_mode | string | no | balanced | `light` \| `balanced` \| `full` |
+| strictness_level | string | no | normal | `strict` \| `normal` \| `lenient` \| `auto` |
+| ambition_level | string | no | medium | `low` \| `medium` \| `high` \| `extreme` \| `custom` |
 | context_mode | string | no | full | `full` \| `summary` \| `minimal` \| `auto` |
 | role_overrides | object | no | - | Per-role provider/model overrides (see below) |
 
@@ -97,8 +97,8 @@ Each goal object:
 |-------|------|----------|---------|-------------|
 | goal | string | yes | - | Natural-language goal |
 | provider | string | no | - | Provider override for this step |
-| strictness_level | string | no | normal | `strict` \| `normal` \| `lenient` |
-| ambition_level | string | no | medium | `low` \| `medium` \| `high` |
+| strictness_level | string | no | normal | `strict` \| `normal` \| `lenient` \| `auto` |
+| ambition_level | string | no | medium | `low` \| `medium` \| `high` \| `extreme` \| `custom` |
 | context_mode | string | no | full | `full` \| `summary` \| `minimal` \| `auto` |
 | max_steps | integer | no | 8 | Max steps for this goal |
 | role_overrides | object | no | - | Per-role overrides |
@@ -336,7 +336,7 @@ Returns: diff text, or `"no changes"` if clean.
   "workspace_mode": "shared|isolated",
   "pipeline_mode": "light|balanced|full",
   "strictness_level": "strict|normal|lenient",
-  "ambition_level": "low|medium|high",
+  "ambition_level": "low|medium|high|extreme|custom",
   "context_mode": "full|summary|minimal|auto",
   "max_steps": 8,
   "current_step": 3,

@@ -16,14 +16,14 @@ go test ./...    # PASS
 - Bounded orchestrator loop with persisted job state, step state, ordered events, and atomic JSON storage.
 - Provider-backed planner and evaluator phases, plus persisted planning artifacts and verification contracts.
 - Target pipeline redesign is in flight: control-plane surfaces now expose `pipeline_mode`, bounded resume `extra_steps`, and terminal-state notifications needed for the director/executor/[engine build+test]/evaluator model.
-- Evaluator-gated completion with strictness levels:
-  - `strict`: requires succeeded `implement`, `review`, and `test`
-  - `normal`: requires succeeded `implement`; verification can be satisfied by succeeded `test`, `build`, or `command`
-  - `lenient`: can accept provider pass with minimal structural coverage
+- Evaluator-gated completion with strictness levels (all levels default to FAIL; must find explicit evidence of success; finding improvement opportunities causes a fail):
+  - `strict`: adversarial reviewer; traces at least 3 representative inputs end-to-end; applies senior-engineer expectations and scalability checks
+  - `normal`: reviews all changed files; applies domain-standard completeness and checks structural problems
+  - `lenient`: reviews core files only; checks for basic defects and obviously missing features
   - `auto`: defers level selection to the planner phase; planner's `recommended_strictness` and `recommended_max_steps` are adopted before the sprint contract is built; falls back to `normal` if recommendation is absent or unrecognised
 - Evaluator rubric scoring: `VerificationContract.RubricAxes` defines per-axis thresholds (`name`, `weight`, `min_threshold`). The provider evaluator returns `RubricScores` (0.0-1.0 per axis). `mergeEvaluatorReport()` enforces thresholds additively -- rubric can only demote a passing report, never promote a failing one.
 - Planner prompt includes role profiles (provider/model per role) to inform `recommended_strictness` and `recommended_max_steps`; chain context section injected when `job.ChainContext` is present.
-- Jobs and chain goals carry `ambition_level` (`low | medium | high | custom`) and `ambition_text`. When level=custom and text is present, ambition_text fully replaces the default executor/evaluator guidance; when level is low/medium/high and text is present, it is prepended. Omitted or unrecognized level defaults to `medium`. See SUPERVISOR_GUIDE.md for exact default prompt text per level.
+- Jobs and chain goals carry `ambition_level` (`low | medium | high | extreme | custom`) and `ambition_text`. When level=custom and text is present, ambition_text fully replaces the default executor/evaluator guidance; when level is low/medium/high/extreme and text is present, it is prepended. Omitted or unrecognized level defaults to `medium`. The `extreme` level demands production-grade quality: fuzz/bench/edge-case coverage and extensible design. See SUPERVISOR_GUIDE.md for exact default prompt text per level.
 - Role-specific worker prompts are differentiated:
   - executor: implementation-focused with ambition-aware autonomy guidance (`low` = fix only, `medium` = allow directly related improvements, `high` = allow justified structural expansion)
   - evaluator: adversarial verification focused on counterexamples, regressions, lifecycle/restart/retry/recovery/idempotency issues, and state-transition safety; reads artifacts directly; depth scales with pipeline_mode (QUICK/THOROUGH/EXHAUSTIVE)
@@ -165,7 +165,9 @@ go test ./...    # PASS
 
 - Planning, worker, and system artifacts are materialized atomically under `.gorchera/artifacts/<jobID>/`.
 - Worker artifacts prefer real file content via `WorkerOutput.FileContents`.
-- Successful single-worker steps collect `git diff --stat` into `Step.DiffSummary` when available.
+- Workspace change detection: before and after each worker step, file state is compared using `git diff --stat` when a git repo is present; SHA-256 hash fallback otherwise (respecting .gitignore and defaultExcludes). Result stored in `Step.DiffSummary`.
+- `changed_files` from the diff and `diff_summary` are injected inline into the evaluator payload.
+- Automated checks: `verification_contract.automated_checks` array runs before the evaluator call. Supported types: `grep`, `file_exists`, `file_unchanged`, `no_new_deps`. Results injected as `automated_check_results` into the evaluator payload.
 - Parallel worker fan-out is implemented with `max_parallel_workers = 2` and disjoint target/write-scope checks.
 
 ### Harness and control plane
@@ -178,7 +180,7 @@ go test ./...    # PASS
   - job lifecycle tools
   - chain lifecycle tools
   - `gorchera_start_job.pipeline_mode` (`light` | `balanced` | `full`, default `balanced`)
-  - `gorchera_start_job.ambition_level`
+  - `gorchera_start_job.ambition_level` (`low` | `medium` | `high` | `extreme` | `custom`, default `medium`)
   - `gorchera_start_job.role_overrides`
   - `gorchera_start_job.prompt_overrides` (per-role prepend; workspace file overrides also supported via `.gorchera/prompts/{role}.md`)
   - `gorchera_start_chain` per-goal `ambition_level`

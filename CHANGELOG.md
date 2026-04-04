@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (post v2026.04.04)
+
+### Breaking
+- **3-agent pipeline**: reviewer role removed. Evaluator now performs code review + gate. Pipeline is director -> executor -> evaluator. review/audit task types removed from leader schema.
+- **Default pipeline_mode**: changed from light to balanced (THOROUGH evaluator depth).
+
+### Added
+- **Evaluator strictness levels** (lenient/normal/strict): all levels default FAIL, improvements found = fail. Strict mode uses adversarial 3-input tracing, domain completeness checks, and extensibility demands. Strictness is now injected into evaluator prompt (was only in leader prompt before).
+- **Extreme ambition level**: production-grade quality demands -- fuzz testing, benchmarks, edge case handling, extensible design. Added to both executor and evaluator guidance.
+- **Automated checks**: planner generates structured automated_checks in verification_contract (grep/file_exists/file_unchanged/no_new_deps). Executed mechanically before evaluator LLM call, results injected into evaluator payload.
+- **Workspace change detection**: pre/post worker execution file tracking. Git fast path (git diff --stat parsing) with SHA-256 hash fallback for non-git workspaces. .gitignore + default excludes (node_modules, .cache, vendor, etc.). Changed files reported per step.
+- **Evaluator payload enrichment**: diff_summary and error_reason inlined per step, artifact paths included, changed_files and automated_check_results added. Summary limit raised to 500 chars.
+- **Evaluator fix loop**: evaluator "failed" now re-enters leader retry loop (was instant job termination). Leader receives evaluator findings in context to dispatch fix steps.
+- **Production presets**: examples/role-profiles.sample.json updated with production (strict+extreme), spark+claude-eval combo, and prompt_overrides examples.
+- prompt_overrides support in ChainGoal (was missing -- BUG-1 fix).
+
+### Fixed
+- Leader schema: system_action changed to anyOf [null, object] for OpenAI strict mode compatibility.
+- Leader prompt: [no test files] guidance added (engine artifact is readable by leader agent via workspace access).
+- automated_checks schema: all properties in required array for OpenAI strict mode.
+- verification_contract required: automated_checks included for OpenAI strict mode.
+- prompt_overrides: # REPLACE with empty content now correctly clears base prompt (was silently ignored).
+- prompt_overrides: types.go comment updated to remove stale "reviewer" key reference.
+
+## v2026.04.04
+
+### Fixed
+- Leader schema: system_action nullable (anyOf null pattern) -- reduces token waste and schema retry errors.
+- Leader prompt: [no test files] engine artifact guidance for AI agents with workspace access.
+
 ## v2026.04.03
 
 ### Added

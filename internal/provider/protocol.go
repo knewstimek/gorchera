@@ -1074,14 +1074,13 @@ func applyPromptOverrides(base, role, workspaceDir string, jobOverrides map[stri
 	}
 
 	result := base
-	if wsContent != "" {
-		if isReplace {
-			// Workspace file replaces the hardcoded base entirely.
-			result = strings.TrimSpace(wsContent)
-		} else {
-			// Workspace file is prepended before the base prompt.
-			result = strings.TrimSpace(wsContent) + "\n\n" + base
-		}
+	if isReplace {
+		// Workspace file replaces the hardcoded base entirely.
+		// Empty content after # REPLACE is valid -- it means suppress the base prompt.
+		result = strings.TrimSpace(wsContent)
+	} else if wsContent != "" {
+		// Workspace file is prepended before the base prompt.
+		result = strings.TrimSpace(wsContent) + "\n\n" + base
 	}
 
 	// Step 2: prepend job-level override on top of whatever base we settled on.

@@ -297,6 +297,7 @@ type ChainGoal struct {
 	ContextMode      string                  `json:"context_mode,omitempty"`
 	MaxSteps         int                     `json:"max_steps"`
 	RoleOverrides    map[string]RoleOverride `json:"role_overrides,omitempty"`
+	PromptOverrides  map[string]string       `json:"prompt_overrides,omitempty"`
 	PreBuildCommands []string                `json:"pre_build_commands,omitempty"`
 	EngineBuildCmd   string                  `json:"engine_build_cmd,omitempty"`
 	EngineTestCmd    string                  `json:"engine_test_cmd,omitempty"`
@@ -545,7 +546,7 @@ type Job struct {
 	EngineTestCmd           string                  `json:"engine_test_cmd,omitempty"`
 	// PromptOverrides carries per-role prompt fragments that the provider
 	// prepends to the hardcoded base prompt before each role call.
-	// Keys are role names (director, executor, reviewer, evaluator).
+	// Keys are role names (director, executor, evaluator).
 	// Values are plain text prepended verbatim with a blank-line separator.
 	// Set at job creation time and never mutated during execution.
 	PromptOverrides         map[string]string       `json:"prompt_overrides,omitempty"`

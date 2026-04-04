@@ -946,6 +946,7 @@ func (s *Server) toolStartChain(ctx context.Context, args map[string]any) (toolR
 				goal.RoleOverrides = parseRoleOverrides(roMap)
 			}
 		}
+		goal.PromptOverrides = parsePromptOverrides(goalMap)
 		if strings.TrimSpace(goal.Goal) == "" {
 			return toolResult{}, fmt.Errorf("goals[%d].goal is required", i)
 		}

@@ -57,7 +57,7 @@ Pipeline modes:
 - `full`: evaluator performs EXHAUSTIVE verification and enables heavier director orchestration patterns such as fix loops and parallel workers.
 
 Control-plane compatibility notes:
-- `gorchera_start_job` accepts `pipeline_mode`; omitted values are treated as `balanced`.
+- `gorchera_start_job` accepts `pipeline_mode`; omitted values default to `balanced`.
 - `gorchera_start_job` and `gorchera_start_chain` both accept `role_overrides`.
 - `gorchera_resume` accepts bounded optional `extra_steps` (1-20) for blocked `max_steps_exceeded` resumes.
 - MCP clients receive terminal notifications through `notifications/job_terminal` with `{job_id, status, summary}` once the terminal state is persisted.
@@ -126,8 +126,8 @@ Sequential chains are persisted as `JobChain` records under `.gorchera/state/cha
 Start path:
 - `StartChain()` validates the shared workspace directory.
 - Each incoming `ChainGoal` is normalized:
-  - `strictness_level`: `strict | normal | lenient`
-  - `ambition_level`: `low | medium | high` (defaults to `medium`)
+  - `strictness_level`: `strict | normal | lenient | auto` (defaults to `normal`)
+  - `ambition_level`: `low | medium | high | extreme | custom` (defaults to `medium`)
   - `context_mode`: `full | summary | minimal`
   - `max_steps`: defaults to 8
   - `provider`: defaults to `mock`
@@ -186,6 +186,8 @@ Worker autonomy is shaped by `job.AmbitionLevel`:
 - `low`: executor must stay mechanical and avoid refactors or scope expansion
 - `medium`: executor may include directly related fixes such as obvious error handling or edge cases
 - `high`: executor may make justified structural improvements and flag adjacent risks
+- `extreme`: production-grade expectations; executor must include fuzz/bench/edge-case coverage and design for extensibility
+- `custom`: ambition_text fully replaces the default guidance when provided; falls back to `medium` if ambition_text is blank
 
 Normalization:
 - Empty or unrecognized values are normalized to `medium`
@@ -315,8 +317,9 @@ System command scope:
 
 Single worker execution:
 - `runWorkerStep()` creates one active step, calls the role-selected worker adapter, validates JSON/schema, materializes artifacts, and updates step/job status
-- On successful single-worker completion, `collectWorkspaceDiffSummary()` runs `git -C <workspace> diff --stat` and stores the result in `Step.DiffSummary`
-- If `git diff --stat` fails or the workspace is not a git repo, `DiffSummary` remains empty
+- Before and after worker execution, `collectWorkspaceDiff()` compares workspace file state: uses `git diff --stat` when a git repo is present; falls back to SHA-256 hash comparison otherwise. The result is stored in `Step.DiffSummary`.
+- If `git diff --stat` fails or the workspace is not a git repo, SHA-256 hash fallback runs over tracked files (respecting .gitignore and defaultExcludes).
+- `changed_files` from the diff is injected into the evaluator payload alongside `diff_summary`
 
 Parallel worker execution:
 - `parallel.go` enforces `maxParallelWorkers = 2`
@@ -377,6 +380,36 @@ MCP (17 tools + notifications):
 - MCP notifications:
   - `notifications/message` for event streaming
   - `notifications/job_terminal` for persisted final states (`done`, `failed`, `blocked`)
+
+## Evaluator Strictness Levels
+
+Strictness levels control how aggressively the evaluator judges completion. All levels default to FAIL; they must find explicit evidence of success. A job that reveals improvement opportunities is failed by all levels.
+
+- `lenient`: reviews core files only; checks for basic defects and obviously missing features. Minimal structural coverage required.
+- `normal`: reviews all changed files; applies domain-standard completeness expectations and checks for structural problems.
+- `strict`: adversarial reviewer mode. Traces at least 3 representative inputs end-to-end, applies senior-engineer expectations, checks for scalability concerns, and searches for counterexamples.
+- `auto`: defers level selection to the planner phase (see Adaptive Decomposition section).
+
+## Automated Checks
+
+`verification_contract.automated_checks` is an array of mechanical check descriptors that run before the evaluator provider call. Each check has a `type` field:
+
+- `grep`: search for a pattern in the workspace; pass if found (or not found, depending on config)
+- `file_exists`: assert that a file path exists
+- `file_unchanged`: assert that a specific file has not been modified (by comparing hash)
+- `no_new_deps`: assert that no new dependencies were introduced
+
+Results are injected into the evaluator payload as `automated_check_results`. The evaluator prompt includes the pass/fail status of each check so the provider can factor them into its verdict.
+
+## Evaluator Payload
+
+The evaluator provider call receives an enriched payload:
+- `diff_summary`: human-readable summary of workspace changes (from git diff --stat or hash comparison)
+- `changed_files`: list of modified file paths
+- `automated_check_results`: results from verification_contract.automated_checks
+- `error_reason`: inline failure reason if a prior step failed
+- Planning artifact paths and evaluator report reference
+- Summary capped at 500 characters
 
 ## Evaluator Rubric Scoring
 

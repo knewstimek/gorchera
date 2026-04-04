@@ -596,6 +596,7 @@ func (s *Service) startChainGoal(ctx context.Context, chain *domain.JobChain, wo
 		ContextMode:      goal.ContextMode,
 		RoleProfiles:     domain.DefaultRoleProfiles(goal.Provider),
 		RoleOverrides:    goal.RoleOverrides,
+		PromptOverrides:  goal.PromptOverrides,
 		PreBuildCommands: goal.PreBuildCommands,
 		EngineBuildCmd:   goal.EngineBuildCmd,
 		EngineTestCmd:    goal.EngineTestCmd,

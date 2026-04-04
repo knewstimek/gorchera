@@ -7,7 +7,8 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 ## Features
 
 - **3-agent pipeline**: director -> executor -> [engine build/test] -> evaluator
-- **3 strictness levels**: strict (implement+review+test), normal (implement only), lenient (results only)
+- **3 strictness levels**: lenient (core files, basic defects), normal (all changed files, domain standards), strict (adversarial reviewer, 3-input trace, senior engineer bar)
+- **5 ambition levels**: low, medium, high, extreme, custom -- controls executor scope and evaluator leniency
 - **3 context modes**: full, summary, minimal -- controls director prompt payload size
 - **Job chaining**: sequential multi-goal execution with automatic advancement
 - **Chain-level controls**: pause, resume, cancel, skip individual chain goals
@@ -17,6 +18,8 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 - **Synchronous wait**: block on job/chain status with configurable timeout
 - **Self-improvement**: Gorchera can modify its own codebase via orchestrated jobs
 - **Schema retry**: up to 2 retries on schema validation failure per role (director/executor/evaluator)
+- **Automated checks**: verification_contract automated_checks (grep, file_exists, file_unchanged, no_new_deps) run before evaluator; results injected into evaluator payload
+- **Workspace change detection**: git diff --stat before/after worker execution; SHA-256 hash fallback when no git repo
 - **pre_build_commands**: run setup commands (e.g. `go mod tidy`, `npm install`) before engine build/test
 - **engine_build_cmd / engine_test_cmd**: override engine verification commands per job (e.g. `npm run build` / `npm test` for Node projects)
 - **Error classification**: 12 error types with 3-strike retry policy
@@ -38,8 +41,8 @@ go run ./cmd/gorchera status -all
 
 Gorchera supports three pipeline modes to balance quality vs cost:
 
-- **light** (default): director -> executor -> engine build/test -> evaluator. Fastest and cheapest. Evaluator performs QUICK verification. Good for simple changes.
-- **balanced**: Evaluator performs THOROUGH verification including code review and contract checks. Good for moderate changes.
+- **light**: director -> executor -> engine build/test -> evaluator. Fastest and cheapest. Evaluator performs QUICK verification. Good for simple changes.
+- **balanced** (default): Evaluator performs THOROUGH verification including code review and contract checks. Good for moderate changes.
 - **full**: Evaluator performs EXHAUSTIVE verification with fix loops and parallel workers. For complex, risky changes.
 
 Light mode with cross-provider (director=GPT, executor=Claude Sonnet) costs ~$0.04 per job.

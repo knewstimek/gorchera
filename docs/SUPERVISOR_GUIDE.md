@@ -29,6 +29,7 @@ The exact text injected into executor and evaluator prompts:
 | low | "Do exactly what is described. Do not improve, refactor, or extend beyond the explicit task." | "Ambition level is low. Judge the result against the explicit task only. Do not require extra refactors, improvements, or scope expansion." |
 | medium (default) | "Complete the task. If you notice directly related improvements (missing error handling, obvious edge cases), include them but stay within the stated scope." | "Ambition level is medium. Accept directly related improvements such as obvious error handling or edge-case fixes, but still enforce the stated scope." |
 | high | "Achieve the goal and go further. Propose and implement structural improvements, suggest better patterns, flag risks the goal didn't mention. Expand scope if justified." | "Ambition level is high. Accept justified scope expansion when it materially supports the goal. Do not fail solely because the worker improved structure, proposed better patterns, or flagged adjacent risks beyond the original task." |
+| extreme | "Treat this as production-grade work. Include fuzz tests, benchmarks, and edge-case coverage. Design for extensibility and long-term maintainability. Exceed expectations." | "Ambition level is extreme. Require production-grade quality: fuzz/bench/edge-case coverage, extensible design, no shortcuts. Fail if production readiness is not demonstrated." |
 | custom | _(replaced by ambition_text; falls back to medium if ambition_text is blank)_ | _(same)_ |
 
 ### Custom ambition
@@ -68,6 +69,7 @@ Both executor and evaluator receive the same transformed guidance.
 - **low**: "H2: change token comparison to constant-time"
 - **medium**: "Fix audit V2 CRITICAL/HIGH 5 items + build/test pass"
 - **high**: "Status API is blind during execution, causing supervisor to kill healthy jobs. Fix the root cause and propose a structure that prevents similar visibility problems."
+- **extreme**: "Implement automated_checks execution in the evaluator pipeline. Production-grade: fuzz the check parser, bench the diff collection, cover all 4 check types with table-driven tests."
 - **custom**: Surgical constraint or domain-specific rule that none of the presets express precisely.
 
 Higher ambition = more context and autonomy needed in the goal.
@@ -92,9 +94,9 @@ Choose based on task complexity:
 
 | Mode | Pipeline | When to use |
 |------|----------|------------|
-| **light** (default) | director -> executor -> engine -> evaluator | Simple changes, low risk |
-| **balanced** | evaluator THOROUGH verification | Moderate changes, code review needed |
-| **full** | + fix loops, parallel workers | Complex/risky, multiple iterations expected |
+| **light** | director -> executor -> engine -> evaluator (QUICK) | Simple changes, low risk |
+| **balanced** (default) | evaluator THOROUGH verification | Moderate changes, code review needed |
+| **full** | evaluator EXHAUSTIVE + fix loops, parallel workers | Complex/risky, multiple iterations expected |
 
 ## Provider Presets
 
@@ -103,14 +105,14 @@ See `examples/role-profiles.sample.json` for full presets. Recommended:
 ```json
 {
   "provider": "codex",
-  "pipeline_mode": "light",
+  "pipeline_mode": "balanced",
   "role_overrides": {
     "executor": {"provider": "claude", "model": "sonnet"}
   }
 }
 ```
 
-Result: director/evaluator = GPT 5.4, executor = Claude Sonnet. ~$0.04/job in light mode.
+Result: director/evaluator = GPT 5.4, executor = Claude Sonnet. ~$0.04/job in light mode; balanced adds THOROUGH evaluator at minimal extra cost.
 
 ## Job Submission Checklist
 
@@ -122,7 +124,7 @@ Before every `gorchera_start_job`:
 4. context_mode set? (summary for large jobs)
 5. max_steps sufficient? (16 for large, 6-8 for normal)
 6. Goal has Why/Invariants/Constraints?
-7. pipeline_mode appropriate? (light default, balanced for risky)
+7. pipeline_mode appropriate? (balanced default, light for trivial changes, full for complex/risky)
 
 ## Resuming Blocked Jobs
 
