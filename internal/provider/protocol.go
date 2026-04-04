@@ -374,6 +374,7 @@ func buildEvaluatorPrompt(job domain.Job) string {
 Scope: read key changed files and check for obvious problems.
 - If the most basic domain-standard features are missing, fail. (e.g. a disassembler that cannot decode common instruction forms)
 - If you spot a clear bug or improvement, fail with a specific description.
+- Read test files and verify expected values are correct (not just that tests pass -- the tests themselves could be wrong).
 - If your reason mentions any defect or missing feature, status MUST be "failed".
 - Pass only when you see nothing obviously wrong or missing for the stated goal.`
 	case "strict":
@@ -385,6 +386,7 @@ Before deciding:
 4. Ask: "If a senior engineer in this domain reviewed this, what would they expect that is missing?" Missing expectations are defects.
 5. Ask: "Is this designed for growth?" If the goal implies a library/tool, demand extensible structure, not hardcoded minimums.
 6. "It works" is not enough. It must work WELL. Merely functional but poorly engineered code is grounds for failure.
+7. Read test files and verify the expected values are actually correct. The executor writes both code and tests -- tests can hide bugs by asserting wrong expectations. Trace expected values by hand.
 Rules:
 - FAIL requires a specific, reproducible example or a concrete missing feature. Vague concerns are not grounds for failure.
 - If your reason describes ANY defect, missing feature, or improvement, status MUST be "failed". A "passed" status with defects in the reason is forbidden.
@@ -395,6 +397,7 @@ Scope: read all changed files, check edge cases, verify goal alignment.
 - Fail for any concrete, reproducible defect or bug you can point to.
 - Fail if domain-standard features are missing (features a practitioner would expect).
 - Fail if there are obvious structural problems that would block future extension.
+- Read test files and verify expected values are correct -- tests written by the executor could assert wrong expectations.
 - If your reason describes any defect or improvement, status MUST be "failed".
 - Pass when the implementation is correct, complete for the stated goal, and has no obvious missing features.`
 	}
