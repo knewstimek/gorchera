@@ -508,7 +508,9 @@ func toolList() []toolDef {
 						Type:        "object",
 						Description: "Per-role prompt overrides (prepend to default prompt). Keys: director, executor, evaluator. Values: additional instructions prepended to the role's system prompt. Replace mode is not available via job parameters (use .gorchera/prompts/{role}.md with # REPLACE for that).",
 					},
-					"skip_planning": {Type: "boolean", Description: "Skip the planner LLM call. Use when the goal and done_criteria are already precise -- the verification contract is built directly from done_criteria. Saves one director call. Incompatible with strictness_level=auto (falls back to normal)."},
+					"skip_planning":    {Type: "boolean", Description: "Skip the planner LLM call. Use when the goal and done_criteria are already precise -- the verification contract is built directly from done_criteria. Saves one director call. Incompatible with strictness_level=auto (falls back to normal)."},
+					"skip_leader":      {Type: "boolean", Description: "Skip the leader LLM loop. The orchestrator drives executor->evaluator retries directly without a leader. Use with skip_planning for the lightest pipeline (executor+evaluator only). Evaluator 'blocked' surfaces immediately; 'failed' retries up to max_eval_retries with cumulative failure context."},
+					"max_eval_retries": {Type: "integer", Description: "Max evaluator-driven retries in skip_leader mode (default 3). Has no effect when skip_leader is false."},
 				},
 				Required: []string{"goal"},
 			},
@@ -882,6 +884,8 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	engineTestCmd := stringArg(args, "engine_test_cmd")
 	promptOverrides := parsePromptOverrides(args)
 	skipPlanning := boolArgDefault(args, "skip_planning", false)
+	skipLeader := boolArgDefault(args, "skip_leader", false)
+	maxEvalRetries := intArgDefault(args, "max_eval_retries", 0)
 
 	input := orchestrator.CreateJobInput{
 		Goal:             goal,
@@ -900,6 +904,8 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		EngineTestCmd:    engineTestCmd,
 		PromptOverrides:  promptOverrides,
 		SkipPlanning:     skipPlanning,
+		SkipLeader:       skipLeader,
+		MaxEvalRetries:   maxEvalRetries,
 	}
 	setOptionalStringField(&input, "PipelineMode", pipelineMode)
 

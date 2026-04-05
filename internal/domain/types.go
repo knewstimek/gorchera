@@ -564,6 +564,15 @@ type Job struct {
 	// directly from those fields. Use for well-specified single-step tasks where
 	// a planning call would only paraphrase the goal.
 	SkipPlanning            bool                    `json:"skip_planning,omitempty"`
+	// SkipLeader bypasses the leader LLM loop entirely. The orchestrator drives
+	// executor retries directly: goal -> executor -> evaluator -> retry on fail.
+	// Use with skip_planning for the lightest possible pipeline (executor+evaluator only).
+	// Evaluator "blocked" results surface immediately; "failed" results are retried
+	// up to MaxEvalRetries times with cumulative failure context injected into task_text.
+	SkipLeader              bool                    `json:"skip_leader,omitempty"`
+	// MaxEvalRetries caps evaluator-driven retries in skip_leader mode (default 3).
+	// Has no effect when skip_leader is false.
+	MaxEvalRetries          int                     `json:"max_eval_retries,omitempty"`
 	PromptOverrides         map[string]string       `json:"prompt_overrides,omitempty"`
 	SchemaRetryHint         string                  `json:"schema_retry_hint,omitempty"`
 	// PreCheckResults holds automated check results computed just before the

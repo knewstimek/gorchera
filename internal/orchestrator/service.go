@@ -69,6 +69,10 @@ type CreateJobInput struct {
 	PromptOverrides  map[string]string // per-role prompt fragments prepended at call time
 	// SkipPlanning bypasses the planner LLM call. See domain.Job.SkipPlanning.
 	SkipPlanning     bool
+	// SkipLeader bypasses the leader loop. See domain.Job.SkipLeader.
+	SkipLeader       bool
+	// MaxEvalRetries caps evaluator retries in skip_leader mode. See domain.Job.MaxEvalRetries.
+	MaxEvalRetries   int
 	ChainID          string
 	ChainGoalIndex   int
 }
@@ -450,6 +454,8 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		EngineTestCmd:         strings.TrimSpace(input.EngineTestCmd),
 		PromptOverrides:       canonicalizePromptOverrides(input.PromptOverrides),
 		SkipPlanning:          input.SkipPlanning,
+		SkipLeader:            input.SkipLeader,
+		MaxEvalRetries:        input.MaxEvalRetries,
 		ChainID:               strings.TrimSpace(input.ChainID),
 		ChainGoalIndex:        input.ChainGoalIndex,
 		Status:                domain.JobStatusStarting,
@@ -1249,6 +1255,10 @@ func (s *Service) runLoop(ctx context.Context, job *domain.Job) (result *domain.
 		if job.Status == domain.JobStatusBlocked || job.Status == domain.JobStatusFailed {
 			return job, nil
 		}
+	}
+
+	if job.SkipLeader {
+		return s.runSkipLeaderLoop(ctx, job)
 	}
 
 	leaderRetryPending := false
