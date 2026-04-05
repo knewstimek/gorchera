@@ -508,6 +508,7 @@ func toolList() []toolDef {
 						Type:        "object",
 						Description: "Per-role prompt overrides (prepend to default prompt). Keys: director, executor, evaluator. Values: additional instructions prepended to the role's system prompt. Replace mode is not available via job parameters (use .gorchera/prompts/{role}.md with # REPLACE for that).",
 					},
+					"skip_planning": {Type: "boolean", Description: "Skip the planner LLM call. Use when the goal and done_criteria are already precise -- the verification contract is built directly from done_criteria. Saves one director call. Incompatible with strictness_level=auto (falls back to normal)."},
 				},
 				Required: []string{"goal"},
 			},
@@ -880,6 +881,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 	engineBuildCmd := stringArg(args, "engine_build_cmd")
 	engineTestCmd := stringArg(args, "engine_test_cmd")
 	promptOverrides := parsePromptOverrides(args)
+	skipPlanning := boolArgDefault(args, "skip_planning", false)
 
 	input := orchestrator.CreateJobInput{
 		Goal:             goal,
@@ -897,6 +899,7 @@ func (s *Server) toolStartJob(ctx context.Context, args map[string]any) (toolRes
 		EngineBuildCmd:   engineBuildCmd,
 		EngineTestCmd:    engineTestCmd,
 		PromptOverrides:  promptOverrides,
+		SkipPlanning:     skipPlanning,
 	}
 	setOptionalStringField(&input, "PipelineMode", pipelineMode)
 

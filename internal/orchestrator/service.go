@@ -67,6 +67,8 @@ type CreateJobInput struct {
 	EngineBuildCmd   string            // overrides default "go build ./..."; empty = default
 	EngineTestCmd    string            // overrides default "go test ./..."; empty = default
 	PromptOverrides  map[string]string // per-role prompt fragments prepended at call time
+	// SkipPlanning bypasses the planner LLM call. See domain.Job.SkipPlanning.
+	SkipPlanning     bool
 	ChainID          string
 	ChainGoalIndex   int
 }
@@ -447,6 +449,7 @@ func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
 		EngineBuildCmd:        strings.TrimSpace(input.EngineBuildCmd),
 		EngineTestCmd:         strings.TrimSpace(input.EngineTestCmd),
 		PromptOverrides:       canonicalizePromptOverrides(input.PromptOverrides),
+		SkipPlanning:          input.SkipPlanning,
 		ChainID:               strings.TrimSpace(input.ChainID),
 		ChainGoalIndex:        input.ChainGoalIndex,
 		Status:                domain.JobStatusStarting,

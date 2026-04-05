@@ -55,14 +55,24 @@ const (
 
 type RoleName string
 
+// There are 3 agents: Director, Executor, Evaluator.
+//
+// Director is one agent that runs in two phases:
+//   - Planner phase (once): reads the goal, writes execution_plan + verification_contract
+//   - Leader phase (each turn): reads step results, decides next action
+// RolePlanner and RoleLeader are the same agent -- they share the same model by default.
+// The split exists only so you can override each phase independently if needed.
+//
+// Executor runs all worker tasks (implement, test, review, ...).
+// Evaluator is the mandatory completion gate; it never runs worker tasks.
 const (
-	RoleDirector  RoleName = "director"
-	RolePlanner   RoleName = "planner"
-	RoleLeader    RoleName = "leader"
-	RoleExecutor  RoleName = "executor"
-	RoleReviewer  RoleName = "reviewer"
-	RoleTester    RoleName = "tester"
-	RoleEvaluator RoleName = "evaluator"
+	RoleDirector  RoleName = "director"  // shorthand in role_overrides: applies to both planner and leader
+	RolePlanner   RoleName = "planner"   // director, phase 1: planning
+	RoleLeader    RoleName = "leader"    // director, phase 2: orchestration
+	RoleExecutor  RoleName = "executor"  // all worker tasks
+	RoleReviewer  RoleName = "reviewer"  // kept for profile lookup only; tasks route to executor
+	RoleTester    RoleName = "tester"    // kept for profile lookup only; tasks route to executor
+	RoleEvaluator RoleName = "evaluator" // completion gate only, never a worker
 )
 
 const (
@@ -158,11 +168,11 @@ func (p ExecutionProfile) withFallback(base ProviderName) ExecutionProfile {
 	return p
 }
 
+// RoleForTaskType maps a leader-assigned task type to the role that executes it.
+// All task types route to executor -- evaluator is the completion gate, not a worker.
 func RoleForTaskType(taskType string) RoleName {
 	switch strings.ToLower(strings.TrimSpace(taskType)) {
 	case "review", "audit":
-		// Route to executor so review/audit tasks use executor profile.
-		// RoleReviewer is kept for backwards-compatible profile lookup only.
 		return RoleExecutor
 	case "test":
 		return RoleExecutor
@@ -549,6 +559,11 @@ type Job struct {
 	// Keys are role names (director, executor, evaluator).
 	// Values are plain text prepended verbatim with a blank-line separator.
 	// Set at job creation time and never mutated during execution.
+	// SkipPlanning bypasses the planner LLM call. The supervisor is expected to
+	// supply a precise goal and done_criteria; the verification contract is built
+	// directly from those fields. Use for well-specified single-step tasks where
+	// a planning call would only paraphrase the goal.
+	SkipPlanning            bool                    `json:"skip_planning,omitempty"`
 	PromptOverrides         map[string]string       `json:"prompt_overrides,omitempty"`
 	SchemaRetryHint         string                  `json:"schema_retry_hint,omitempty"`
 	// PreCheckResults holds automated check results computed just before the

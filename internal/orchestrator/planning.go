@@ -16,6 +16,18 @@ func (s *Service) ensurePlanning(ctx context.Context, job *domain.Job) error {
 		return nil
 	}
 
+	// When skip_planning is set the supervisor has already encoded a precise goal
+	// and done_criteria. Build the planning artifacts directly from the job fields
+	// instead of calling the planner LLM. The verification contract is derived
+	// from done_criteria so the evaluator gate still has acceptance criteria.
+	// "auto" strictness cannot adopt a planner recommendation here, so fall back.
+	if job.SkipPlanning {
+		if job.StrictnessLevel == "auto" {
+			job.StrictnessLevel = "normal"
+		}
+		return s.persistPlanning(ctx, job, buildPlanningArtifact(*job, nil))
+	}
+
 	plannerOutput, err := s.runPlannerPhase(ctx, job)
 	if err != nil {
 		if isShutdownInterruption(ctx, err) {
