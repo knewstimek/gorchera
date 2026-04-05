@@ -6,7 +6,7 @@ Go stateful multi-agent orchestration engine / harness engineering with self-imp
 
 ## Features
 
-- **3-agent pipeline**: director -> executor -> [engine build/test] -> evaluator
+- **3-agent pipeline**: director -> executor -> [engine build/test] -> evaluator; or executor -> evaluator only with `skip_leader`
 - **3 strictness levels**: lenient (core files, basic defects), normal (all changed files, domain standards), strict (adversarial reviewer, 3-input trace, senior engineer bar)
 - **5 ambition levels**: low, medium, high, extreme, custom -- controls executor scope and evaluator leniency
 - **3 context modes**: full, summary, minimal -- controls director prompt payload size
@@ -71,6 +71,20 @@ Gorchera supports three pipeline modes to balance quality vs cost:
 - **full**: Evaluator performs EXHAUSTIVE verification with fix loops and parallel workers. For complex, risky changes.
 
 Light mode with cross-provider (director=GPT, executor=Claude Sonnet) costs ~$0.04 per job.
+
+### Skip Flags (Lightest Pipeline)
+
+For chain jobs where the supervisor already owns the decomposition:
+
+| Flag | Effect |
+|------|--------|
+| `skip_planning` | Skip planner LLM; build verification contract from `done_criteria` directly |
+| `skip_leader` | Skip leader LLM loop; orchestrator drives executor->evaluator retries |
+| Both combined | Executor + evaluator only -- no director LLM calls at all |
+
+`max_eval_retries` (default 3): how many executor->evaluator cycles before failing. Each retry injects cumulative failure reasons into the next executor call so it knows what to fix without regressing earlier corrections.
+
+Use `skip_leader` for chain-based porting or translation jobs (e.g., one package per chain goal). The leader is redundant when the supervisor has already decomposed the work atomically -- and the test suite provides an objective, mechanical verification signal that the evaluator can use directly without any leader-level interpretation.
 
 ## MCP Tools
 
@@ -193,6 +207,9 @@ Example: executor=gpt-5.3-codex-spark, evaluator=claude-sonnet-4-6
 - prompt_overrides: per-role prompt prepend (keys: director, executor, evaluator)
 - engine_build_cmd / engine_test_cmd: override build/test commands (default: go build/test)
 - Non-code projects: set engine_build_cmd and engine_test_cmd to "true" (a no-op shell command that always succeeds) to skip engine build/test verification
+- skip_planning: skip planner LLM; use done_criteria as verification contract directly
+- skip_leader: skip leader LLM loop; orchestrator retries executor->evaluator up to max_eval_retries (default 3)
+- skip_planning + skip_leader: lightest pipeline -- executor + evaluator only, no director LLM calls
 
 ### Presets
 See examples/role-profiles.sample.json for ready-made configurations.

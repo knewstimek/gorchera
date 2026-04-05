@@ -98,6 +98,24 @@ Choose based on task complexity:
 | **balanced** (default) | evaluator THOROUGH verification | Moderate changes, code review needed |
 | **full** | evaluator EXHAUSTIVE + fix loops, parallel workers | Complex/risky, multiple iterations expected |
 
+### Skip flags (lightest pipeline)
+
+For well-specified goals where the supervisor owns the orchestration logic (e.g., chain-based porting jobs):
+
+| Flag | Effect |
+|------|--------|
+| `skip_planning: true` | Skip planner LLM call. Verification contract is built from `done_criteria` directly. `strictness_level=auto` falls back to `normal`. |
+| `skip_leader: true` | Skip leader LLM loop. Orchestrator synthesizes executor tasks from the goal and drives executor->evaluator retries directly. |
+| `skip_planning + skip_leader` | Lightest pipeline: executor + evaluator only. No director LLM calls at all. |
+
+`max_eval_retries` (default 3) controls how many executor->evaluator retry cycles are allowed before the job fails.
+
+Each retry injects cumulative evaluator failure reasons into the executor's `task_text` so the executor knows what to fix without regressing earlier corrections.
+
+**When to use skip_leader**: chain jobs where the supervisor has already decomposed the work into atomic steps (e.g., porting one package per chain goal). The leader LLM is redundant overhead in this case -- the supervisor is the actual director.
+
+Porting and translation tasks are the canonical fit: the test suite provides a mechanical, objective verification signal (`go test ./...` passes or fails). The evaluator can use test results directly without needing leader-level interpretation of what "done" means. This makes skip_leader both cheaper and more reliable for these jobs.
+
 ## Provider Presets
 
 See `examples/role-profiles.sample.json` for full presets. Recommended:
@@ -125,6 +143,7 @@ Before every `gorchera_start_job`:
 5. max_steps sufficient? (16 for large, 6-8 for normal)
 6. Goal has Why/Invariants/Constraints?
 7. pipeline_mode appropriate? (balanced default, light for trivial changes, full for complex/risky)
+8. skip_planning / skip_leader appropriate? (chain jobs with atomic steps; supervisor owns decomposition)
 
 ## Resuming Blocked Jobs
 
