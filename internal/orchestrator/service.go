@@ -419,6 +419,13 @@ func (s *Service) StartChain(ctx context.Context, goals []domain.ChainGoal, work
 }
 
 func (s *Service) prepareJob(input CreateJobInput) (*domain.Job, error) {
+	// skip_leader without skip_planning is incoherent: the planner's execution_plan
+	// is never seen by the executor (buildSkipLeaderTask uses job.Goal only), so
+	// the planner call is pure token waste. Require skip_planning when skip_leader.
+	if input.SkipLeader && !input.SkipPlanning {
+		return nil, fmt.Errorf("skip_leader requires skip_planning: the planner output is unused when the leader is skipped; set skip_planning=true to avoid wasting tokens")
+	}
+
 	now := time.Now().UTC()
 	jobID := newJobID(now)
 	if input.MaxSteps <= 0 {
